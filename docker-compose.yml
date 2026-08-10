@@ -1,0 +1,6 @@
+services:
+  demo:
+    build: .
+    volumes:
+      - ./outputs:/app/outputs
+    command: python scripts/run_demo.py --config configs/dev.yaml

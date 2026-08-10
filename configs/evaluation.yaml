@@ -1,0 +1,6 @@
+evaluation:
+  geometry: true
+  semantic: true
+  navigation: true
+  memory: true
+  fail_on_missing_artifacts: true

@@ -1,0 +1,1 @@
+"""Event-driven pipeline orchestration."""

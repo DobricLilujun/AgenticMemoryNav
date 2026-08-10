@@ -1,0 +1,26 @@
+"""Storage backend protocol."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Protocol
+
+from agentic_memory_nav.common.types import MemoryItem, Vector3
+
+
+class StorageBackend(Protocol):
+    def add_observation(self, item: MemoryItem) -> MemoryItem: ...
+
+    def update_entity(self, entity_id: str, update: dict[str, object]) -> MemoryItem: ...
+
+    def retrieve_by_text(self, query: str, limit: int = 5) -> list[MemoryItem]: ...
+
+    def retrieve_by_entity(self, entity_id: str) -> list[MemoryItem]: ...
+
+    def retrieve_by_region(self, position: Vector3, radius: float) -> list[MemoryItem]: ...
+
+    def retrieve_by_time(self, start: float, end: float) -> list[MemoryItem]: ...
+
+    def consolidate(self) -> int: ...
+
+    def save_snapshot(self, path: Path) -> None: ...

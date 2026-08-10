@@ -1,0 +1,32 @@
+project:
+  name: Agentic Real-Time Memory-Aware Co-Planning for Long-Horizon Navigation
+  seed: 42
+runtime:
+  output_root: outputs
+  queue_size: 32
+  max_frames: 6
+  verbose: false
+mapping:
+  backend: mock
+  keyframe_interval: 2
+  window_size: 64
+  mock_depth_m: 2.0
+  device: cpu
+  checkpoint: null
+perception:
+  backend: mock
+  device: cpu
+  model_id: null
+memory:
+  backend: sqlite
+  vector_backend: local
+planning:
+  backend: rule_based
+  approach_distance: 0.6
+  replan_every_frames: 1
+execution:
+  backend: unitree_sim
+  real_robot_enabled: false
+  max_speed: 0.5
+  max_angular_speed: 1.0
+  max_action_timeout: 15.0
