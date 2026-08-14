@@ -35,6 +35,11 @@ def success_weighted_path_length(success: bool, shortest: float, actual: float) 
     return float(success) * shortest / max(shortest, actual, 1e-9)
 
 
+def goal_reached(distance_to_goal: float, success_threshold: float) -> bool:
+    """Distance-based success criterion shared by PointNav and ObjectNav episodes."""
+    return distance_to_goal <= success_threshold
+
+
 def precision_recall(true_positive: int, predicted: int, expected: int) -> dict[str, float]:
     return {
         "precision": true_positive / max(1, predicted),

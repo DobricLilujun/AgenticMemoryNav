@@ -1,0 +1,15 @@
+runtime:
+  output_root: outputs
+execution:
+  max_speed: 0.5
+  max_angular_speed: 1.0
+  max_action_timeout: 15.0
+  headless: true
+pointnav:
+  num_episodes: 10
+  seed: 0
+  resolution: 0.1
+  success_threshold_m: 0.36
+  min_geodesic_m: 1.0
+  max_steps_per_episode: 40
+  waypoint_duration_s: 4.0

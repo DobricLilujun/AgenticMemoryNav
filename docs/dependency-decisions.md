@@ -16,7 +16,7 @@ Status: Phase 0 decision record (2026-08-09)
 | Mapping | Deterministic `MockMapper` | LingBot-Map | GPU/checkpoint independent baseline |
 | Perception | Deterministic mock | HF VLM or Grounding-DINO plus SAM | Replaceable and training-free |
 | Planning | Deterministic rule planner | OpenAI-compatible or local HF LLM | Reproducible fallback and valid structured output |
-| Execution | Unitree-like planar simulator | Habitat, ROS2/Gazebo/Isaac/Unitree | Prevent simulator/hardware coupling |
+| Execution | Unitree-like planar simulator | Habitat, Isaac Sim, ROS2/Gazebo/Unitree | Prevent simulator/hardware coupling |
 | Evaluation | NumPy implementations | evo/Open3D accelerators | Lightweight smoke tests first |
 
 ## External Repository Decisions
@@ -87,6 +87,63 @@ Installation decision: use a separate Python 3.11 environment and a matched stab
 Habitat-Lab/Habitat-Sim pair. Prefer a headless, Bullet-enabled build on this machine.
 Do not install Habitat into the current Python 3.12 base interpreter.
 
+### Isaac Sim (6.0.1)
+
+Decision: optional simulation extra, imported only inside `IsaacSimExecutor` /
+`IsaacSimObjectNavExecutor`, mirroring the `HabitatAdapter` fail-closed pattern.
+
+Verified facts (this machine, 2026-08-13):
+
+- Isaac Sim 6.0.1 standalone install ships its own isolated Python (`kit/python/bin/python3`,
+  3.12.13), invoked via `python.sh`. It is not installed into, and should not be installed
+  into, this project's own Python 3.11 environment; the two interpreters are kept separate.
+- `numpy`, `PyYAML`, and `matplotlib` are importable in Isaac Sim's bundled Python out of
+  the box; `networkx` had to be `pip install`-ed into it (same pattern Isaac Sim's own
+  `jupyter_notebook.sh` uses to add `jupyter`).
+- `SimulationApp` must be constructed before any `omni`/`isaacsim.*` submodule import,
+  and only one `SimulationApp` may exist per process; `IsaacSimExecutor`/
+  `IsaacSimObjectNavExecutor` share a single lazily-created instance.
+- `SimulationApp.close()` appears to terminate the hosting process; callers must persist
+  results before calling `executor.close()` (both new benchmark scripts and
+  `scripts/run_demo.py` were fixed to print/write before closing).
+- This standalone install does not bundle Nucleus-hosted sample "Environments" USD
+  assets locally, so the PointNav harness uses procedurally generated scenes
+  (ground plane plus primitive obstacles) instead.
+- Isaac Sim ships a working Jupyter integration (`jupyter_notebook.sh`, registers an
+  `isaac_sim_python3` kernel) used for `notebooks/isaacsim_benchmarks.ipynb`.
+- A headless sensor-recording smoke test ran on 2026-08-14 using the procedural
+  PointNav world and a kinematic quadruped proxy. `Camera` emitted RGB plus metric
+  `distance_to_image_plane`; `LidarRtx` with `Example_Rotary_2D` and the
+  `IsaacComputeRTXLidarFlatScan` annotator emitted 3,600 scan samples per frame.
+  Three recorded depth/c2w frames generated a finite 6,520-point GT cloud through
+  `scripts/build_ground_truth_pointcloud.py`. This confirms artifact plumbing, not
+  physical quadruped, Go2, or hardware-LiDAR fidelity.
+
+Boundary decision: identical to Habitat — the core executor works against the same
+`RobotBackend`-shaped contract (`reset/get_state/get_observation/send_velocity_command/
+send_waypoint/stop/emergency_stop/is_collision/close`); movement is kinematic
+(direct pose interpolation), not physics/contact driven. `is_collision()` always
+returns `False` in the current implementation, matching the same simplification
+already present in `HabitatSimExecutor` and `UnitreeSimExecutor`.
+
+### isaac-objnav-semistatic-eval (ObjectNav reference)
+
+Decision: do **not** vendor this code. Checked `github.com/learnsyslab/isaac-objnav-semistatic-eval`
+on 2026-08-13: no `LICENSE` file exists in the repository (raw fetch returned 404) and
+`pyproject.toml` declares no license, so by default all rights are reserved and no
+permission to copy or redistribute its source has been granted.
+
+What was reused instead: only the publicly documented `experiments.json` schema
+(scene path, `goal.task`/`label`/`asset`, `remove_assets`/`exclude_remove_assets`,
+`robot_start`, `max_runtime`) — a data format, not copyrightable — reimplemented
+independently in `src/agentic_memory_nav/datasets/objectnav.py`. Scene loading,
+substring-based asset removal, and goal-asset lookup in
+`src/agentic_memory_nav/execution/isaacsim_objectnav_adapter.py` are original code
+written against Isaac Sim's `pxr.Usd`/`UsdGeom` APIs, not copied from that repository.
+Users who want to run the original upstream evaluation suite as-is should use it
+separately; this project only interoperates with the InteriorAgent dataset's scene
+and experiment file conventions.
+
 ### Open3DSG
 
 Decision: preserve its graph semantics and open-vocabulary query concept, but do not
@@ -130,6 +187,20 @@ Repository state: the root repository currently reports the existing project fil
 cloned dependencies as untracked. Phase work must not delete, reset, or rewrite those
 files. The new package should coexist with the checked-out external repositories.
 
+Verified LingBot runtime update on 2026-08-14:
+
+```text
+Python: 3.10.18 in .lingbot-venv
+GPU: NVIDIA RTX A6000, 48 GB, driver CUDA capability 13.2
+Torch: 2.8.0+cu128, torch.cuda.is_available() = true
+LingBot: vendored editable package with local lingbot-map.pt checkpoint
+Smoke test: two courthouse RGB frames; depth, pose, and finite world_points emitted
+```
+
+The point-head model load reported 62 missing checkpoint keys. This is a runtime
+compatibility result, not a geometry-accuracy result. Reconstruction metrics require
+paired depth/pose ground truth and a documented coordinate-frame calibration.
+
 ## Proposed Environment Layout
 
 Use one lightweight development environment first:
@@ -163,6 +234,14 @@ processes with versioned JSON/NPZ artifact contracts rather than forcing one env
 - LingBot-Map examples are geometry smoke-test inputs, subject to their own data terms.
 - Language instructions and reference trajectories use a separate adapter so they are
   not incorrectly inferred from ETH3D metadata.
+- PointNav episodes are procedurally generated over a fixed obstacle layout (see
+  `src/agentic_memory_nav/datasets/pointnav.py`), not the official Habitat/HM3D/MP3D
+  PointNav episode datasets. This is a custom lightweight benchmark for exercising this
+  project's own executor and safety controller, not a paper-comparable benchmark.
+- ObjectNav uses the InteriorAgent dataset (huggingface.co/datasets/spatialverse/InteriorAgent)
+  and an `experiments.json` file in the schema documented above; this dataset was not
+  available in this environment, so `IsaacSimObjectNavExecutor` and
+  `scripts/run_isaacsim_objectnav.py` are implemented but not yet runtime-verified.
 
 ## Assumptions Requiring Validation
 
@@ -173,6 +252,14 @@ processes with versioned JSON/NPZ artifact contracts rather than forcing one env
 3. LingBot-Map weights permit the intended research use and artifact distribution.
 4. LingBot-Map pose decoding can be normalized to camera-to-world with a known-pose test.
 5. Replaying retained LingBot keyframes reproduces acceptable online state after load.
+5a. `IsaacSimObjectNavExecutor.shortest_distance_to_goal()` currently returns a Euclidean
+    lower-bound distance, not a geodesic/occupancy-aware distance; this needs revisiting
+    once the InteriorAgent dataset is available to calibrate a floor-plan occupancy grid
+    against real scene geometry.
+5b. `IsaacSimExecutor`/`IsaacSimObjectNavExecutor` move the robot kinematically and never
+    set `is_collision() -> True`; PointNav SPL results will read as near-1.0 even with
+    obstacles present in the occupancy grid, since no obstacle avoidance or physics-based
+    collision is implemented yet.
 6. Habitat scene assets include the semantic metadata needed by selected evaluations.
 7. Planar Unitree-like kinematics are sufficient for the first navigation experiments;
    they do not represent real Go2 gait or contact dynamics.

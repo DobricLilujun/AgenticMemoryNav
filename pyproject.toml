@@ -8,6 +8,7 @@ dependencies = [
 	"matplotlib>=3.8",
 	"networkx>=3.2",
 	"numpy>=1.26",
+	"Pillow>=10.0",
 	"PyYAML>=6.0",
 ]
 
@@ -35,6 +36,9 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Notebook cells reference names bound in earlier cells at execution time; ruff's
+# per-cell analysis reports those as false-positive undefined names.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

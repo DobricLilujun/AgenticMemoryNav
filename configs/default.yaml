@@ -17,6 +17,9 @@ perception:
   backend: mock
   device: cpu
   model_id: null
+  instance_geometry:
+    enabled: false
+    backend: bounding_box
 memory:
   backend: sqlite
   vector_backend: local

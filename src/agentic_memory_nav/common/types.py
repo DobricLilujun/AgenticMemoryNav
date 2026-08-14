@@ -96,6 +96,45 @@ class MappingUpdate:
 
 
 @dataclass(slots=True)
+class InstanceGeometry:
+    """Compact reference to an instance point cloud stored outside graph JSON."""
+
+    instance_id: str
+    artifact_path: str | None
+    point_count: int
+    centroid_3d: Vector3
+    dimensions_3d: Vector3
+    coordinate_frame: str
+    confidence: float
+    mask_provenance: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class RelationEvidence:
+    """A time-stamped observation supporting a directed graph predicate."""
+
+    source: str
+    predicate: str
+    confidence: float
+    timestamp: float
+    source_frame: str
+    provenance: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SceneTriple:
+    """A semantic subject-predicate-object claim between frame observations."""
+
+    subject_observation_id: str
+    predicate: str
+    object_observation_id: str
+    confidence: float
+    timestamp: float
+    frame_id: str
+    provenance: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class ObjectObservation:
     observation_id: str
     category: str
@@ -108,6 +147,7 @@ class ObjectObservation:
     frame_id: str
     embedding: FloatArray | None = None
     track_id: str | None = None
+    geometry: InstanceGeometry | None = None
     provenance: list[str] = field(default_factory=list)
 
     @property
@@ -139,6 +179,7 @@ class SceneNode:
     observation_count: int = 1
     observation_ids: list[str] = field(default_factory=list)
     embedding: list[float] | None = None
+    geometry: InstanceGeometry | None = None
     provenance: list[str] = field(default_factory=list)
 
 
@@ -155,6 +196,7 @@ class SceneEdge:
     uncertainty: float = 0.0
     observation_count: int = 1
     position_3d: Vector3 | None = None
+    evidence: list[RelationEvidence] = field(default_factory=list)
     provenance: list[str] = field(default_factory=list)
 
 

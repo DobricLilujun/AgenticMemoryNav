@@ -10,7 +10,9 @@ from agentic_memory_nav.common.types import (
     Pose3D,
     new_id,
 )
+from agentic_memory_nav.memory.knowledge_memory import KnowledgeMemory
 from agentic_memory_nav.memory.sqlite_store import SQLiteMemory
+from agentic_memory_nav.reasoning.native_reasoner import NativeReasoner
 from agentic_memory_nav.scene_graph.graph import SceneGraph
 
 
@@ -27,20 +29,15 @@ class RuleBasedPlanner:
         replan_reason: str | None = None,
     ) -> NavigationPlan:
         goal = task.parsed_goal
-        candidates = graph.find_nodes(str(goal["object"]), {"color": str(goal["color"])})
+        reasoning = NativeReasoner(KnowledgeMemory(memory)).resolve(graph, goal)
         memory_hits = memory.retrieve_for_task(task.natural_language_instruction)
-        assumptions = ["plan uses deterministic geometric relations"]
+        assumptions = ["plan uses deterministic geometric relations", reasoning.reason]
         if replan_reason:
             assumptions.append(f"replanned because: {replan_reason}")
 
-        if candidates:
-            target = max(candidates, key=lambda node: node.confidence)
-            room_ok = not goal.get("room") or any(
-                edge.relation == "inside"
-                and edge.source_id == target.node_id
-                and graph.get_node(edge.target_id).label == goal["room"]
-                for edge in graph.relations(target.node_id)
-            )
+        if reasoning.target_id is not None:
+            target = graph.get_node(reasoning.target_id)
+            room_ok = not reasoning.requires_verification
             waypoint = (
                 target.position_3d[0] - self.apach_distance,
                 robot_pose.position[1],
@@ -53,8 +50,8 @@ class RuleBasedPlanner:
                 waypoint=waypoint,
                 duration=8.0,
                 safety_constraints=list(task.constraints),
-                confidence=target.confidence * (1.0 if room_ok else 0.7),
-                reason="target localized in scene graph",
+                confidence=reasoning.confidence,
+                reason=reasoning.reason,
                 expected_observation="red cup visible at close range",
             )
             return NavigationPlan(
@@ -65,7 +62,7 @@ class RuleBasedPlanner:
                 waypoints=[waypoint],
                 information_gaps=[] if room_ok else ["target room relation requires verification"],
                 assumptions=assumptions,
-                confidence=action.confidence,
+                confidence=reasoning.confidence,
                 replan_required=not room_ok,
                 action=action,
             )

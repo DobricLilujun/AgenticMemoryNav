@@ -24,10 +24,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--execution-backend",
         default=None,
-        choices=("unitree_sim", "habitat"),
+        choices=("unitree_sim", "habitat", "isaacsim"),
         help="Optional execution backend override",
     )
-    parser.add_argument("--scene", default=None, help="Optional scene path for habitat backend")
+    parser.add_argument(
+        "--scene", default=None, help="Optional scene path for habitat/isaacsim backends"
+    )
     parser.add_argument(
         "--instruction",
         default="找到厨房里的红色杯子并移动到附近",
@@ -50,12 +52,15 @@ async def run() -> int:
         experiment.path / "logs.jsonl", bool(config.section("runtime").get("verbose", False))
     )
     pipeline = NavigationPipeline(config.raw, experiment, logger)
+    metrics = None
     try:
         metrics = await pipeline.run_task(args.instruction)
     finally:
+        # Print before close(): Isaac Sim's executor.close() terminates the process.
+        if metrics is not None:
+            print(json.dumps(metrics, indent=2, ensure_ascii=False))
+            print(f"Run artifacts: {experiment.path}")
         pipeline.close()
-    print(json.dumps(metrics, indent=2, ensure_ascii=False))
-    print(f"Run artifacts: {experiment.path}")
     return 0 if metrics["success_rate"] == 1.0 else 1
 
 

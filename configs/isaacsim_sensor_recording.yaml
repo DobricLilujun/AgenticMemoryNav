@@ -1,0 +1,8 @@
+recording:
+  output: outputs/isaacsim_sensor_recording
+  frames: 24
+  camera_width: 128
+  camera_height: 96
+  step_m: 0.12
+  lidar: Example_Rotary_2D
+  robot: procedural_quadruped_proxy_kinematic

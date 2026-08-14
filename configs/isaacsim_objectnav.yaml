@@ -1,0 +1,14 @@
+runtime:
+  output_root: outputs
+execution:
+  max_speed: 0.5
+  max_angular_speed: 1.0
+  max_action_timeout: 15.0
+  headless: true
+objectnav:
+  # Path to the downloaded InteriorAgent dataset root (see notebooks/isaacsim_benchmarks.ipynb).
+  scene_root: null
+  experiments_json: null
+  experiment_name: null
+  success_threshold_m: 1.0
+  max_frames: 200

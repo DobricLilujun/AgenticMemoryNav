@@ -19,3 +19,21 @@ def test_waypoint_execution_and_emergency_stop():
     assert executor.send_waypoint(intent.waypoint, intent).success
     executor.emergency_stop()
     assert not executor.send_waypoint(intent.waypoint, intent).success
+
+
+def test_isaacsim_executor_fails_closed_when_unavailable():
+    import importlib.util
+
+    if importlib.util.find_spec("isaacsim") is not None:
+        import pytest
+
+        pytest.skip("isaacsim is importable in this environment; fail-closed path not exercised")
+
+    from agentic_memory_nav.execution.isaacsim_adapter import IsaacSimExecutor
+
+    try:
+        IsaacSimExecutor(scene=None, safety=SafetyController())
+    except RuntimeError as error:
+        assert "isaacsim is not importable" in str(error)
+    else:
+        raise AssertionError("expected RuntimeError when isaacsim is unavailable")

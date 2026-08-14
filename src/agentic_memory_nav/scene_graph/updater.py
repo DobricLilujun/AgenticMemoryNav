@@ -9,8 +9,10 @@ import numpy as np
 from agentic_memory_nav.common.types import (
     NodeType,
     ObjectObservation,
+    RelationEvidence,
     SceneEdge,
     SceneNode,
+    SceneTriple,
     new_id,
 )
 from agentic_memory_nav.perception.object_association import AssociationDecision, ObjectAssociator
@@ -38,6 +40,63 @@ class SceneGraphUpdater:
         self._infer_relations(touched)
         return decisions
 
+    def add_vlm_triples(
+        self,
+        triples: list[SceneTriple],
+        observations: list[ObjectObservation],
+    ) -> None:
+        """Add valid VLM relation claims without replacing geometric evidence."""
+        observation_nodes = {
+            observation.observation_id: observation.track_id
+            for observation in observations
+            if observation.track_id is not None
+        }
+        for triple in triples:
+            source_id = observation_nodes.get(triple.subject_observation_id)
+            target_id = observation_nodes.get(triple.object_observation_id)
+            if source_id is None or target_id is None or source_id == target_id:
+                continue
+            evidence = RelationEvidence(
+                source="vlm",
+                predicate=triple.predicate,
+                confidence=triple.confidence,
+                timestamp=triple.timestamp,
+                source_frame=triple.frame_id,
+                provenance=triple.provenance,
+            )
+            existing = next(
+                (
+                    edge
+                    for edge in self.graph.edges()
+                    if edge.source_id == source_id
+                    and edge.target_id == target_id
+                    and edge.relation == triple.predicate
+                ),
+                None,
+            )
+            if existing is not None:
+                existing.evidence.append(evidence)
+                existing.last_seen = triple.timestamp
+                existing.observation_count += 1
+                existing.confidence = max(existing.confidence, triple.confidence)
+                self.graph.upsert_edge(existing)
+                continue
+            self.graph.upsert_edge(
+                SceneEdge(
+                    edge_id=new_id("edge"),
+                    source_id=source_id,
+                    target_id=target_id,
+                    relation=triple.predicate,
+                    confidence=triple.confidence,
+                    first_seen=triple.timestamp,
+                    last_seen=triple.timestamp,
+                    source_frame=triple.frame_id,
+                    position_3d=self.graph.get_node(source_id).position_3d,
+                    evidence=[evidence],
+                    provenance=triple.provenance,
+                )
+            )
+
     @staticmethod
     def _new_node(observation: ObjectObservation) -> SceneNode:
         node_type = (
@@ -57,6 +116,7 @@ class SceneGraphUpdater:
             source_frame=observation.frame_id,
             observation_ids=[observation.observation_id],
             embedding=observation.embedding.tolist() if observation.embedding is not None else None,
+            geometry=observation.geometry,
             provenance=[*observation.provenance, observation.observation_id],
         )
 
@@ -74,6 +134,8 @@ class SceneGraphUpdater:
         node.source_frame = observation.frame_id
         node.observation_count = count
         node.observation_ids.append(observation.observation_id)
+        if observation.geometry is not None:
+            node.geometry = observation.geometry
         node.confidence = 1.0 - (1.0 - node.confidence) * (1.0 - observation.confidence)
         node.uncertainty = 1.0 - node.confidence
         node.provenance.extend(
@@ -115,6 +177,16 @@ class SceneGraphUpdater:
                                 last_seen=source.last_seen,
                                 source_frame=source.source_frame,
                                 position_3d=source.position_3d,
+                                evidence=[
+                                    RelationEvidence(
+                                        source="geometry",
+                                        predicate=relation,
+                                        confidence=confidence,
+                                        timestamp=source.last_seen,
+                                        source_frame=source.source_frame,
+                                        provenance=[source.source_frame, "geometric_relation_rule"],
+                                    )
+                                ],
                                 provenance=[source.source_frame, "geometric_relation_rule"],
                             )
                         )

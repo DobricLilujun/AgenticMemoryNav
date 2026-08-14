@@ -1,0 +1,40 @@
+project:
+  name: RGB Video to 3D Knowledge Graph
+runtime:
+  output_root: outputs
+  queue_size: 32
+  max_frames: 6
+mapping:
+  backend: lingbot_map
+  checkpoint: null
+  device: cuda
+  worker_python: null
+  keyframe_interval: 6
+  geometry_source: depth_pose_backprojection
+  # Window size counts sampled frames: 300 frames at stride 2 covers about 600 input frames.
+  local_submap_frames: 300
+  local_submap_stride: 2
+  local_submap_stability_threshold_m: 0.50
+  local_submap_max_points_per_frame: 20000
+  commit_stable_submaps_only: true
+  # RGB-only runtime: no LiDAR or external geometry verifier is required.
+  geometry_memory_policy: stable_rgb_only
+perception:
+  backend: vlm
+  device: cuda
+  model_id: null
+  instance_geometry:
+    enabled: true
+    backend: grounded_sam
+memory:
+  backend: sqlite
+  vector_backend: local
+planning:
+  backend: rule_based
+  approach_distance: 0.6
+execution:
+  backend: unitree_sim
+  real_robot_enabled: false
+  max_speed: 0.5
+  max_angular_speed: 1.0
+  max_action_timeout: 15.0

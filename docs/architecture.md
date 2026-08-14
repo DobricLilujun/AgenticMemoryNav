@@ -51,6 +51,7 @@ flowchart LR
     Safety --> Executor[Unitree-like Executor]
     Executor --> Bus
     Executor -. optional .-> Habitat[Habitat Adapter]
+    Executor -. optional .-> IsaacSim[Isaac Sim Adapter]
     Mapping -. optional .-> LingBot[LingBot-Map Adapter]
     Perception -. optional .-> VLM[VLM / Grounding Backend]
 ```
@@ -94,6 +95,13 @@ LingBot-Map adapter state has two layers:
 The streaming buffer never reruns the entire history. It retains initial scale
 frames, selected keyframes, the current frame, and a bounded result cache. Windowed
 mode is selected for offline or very long sequences.
+
+For RGB-only learned depth, the runtime forms bounded local submaps from
+depth-plus-c2w backprojection rather than trusting an optional direct point head.
+Submap consistency is evaluated from symmetric nearest-neighbor overlap residuals
+between adjacent local clouds, which permits normal camera motion. Only a stable
+window becomes a spatial-memory artifact; global similarity alignment is diagnostic
+and never silently rewrites geometric facts.
 
 ### Semantic Perception and Scene Graph Agent
 
@@ -153,6 +161,14 @@ and emergency stop.
 `HabitatAdapter` supplies RGB-D observations, NavMesh checks, path queries, and
 collision state. It does not claim to simulate Go2 locomotion fidelity. ROS2, Gazebo,
 Isaac Sim, and real Unitree backends remain disabled unless explicitly configured.
+
+`IsaacSimExecutor` and `IsaacSimObjectNavExecutor` (`execution.backend=isaacsim`) wrap
+an Isaac Sim 6.0.1 `SimulationApp`, exposing the same `RobotBackend`-shaped contract as
+the Habitat and Unitree-sim executors. Movement is kinematic, matching the fidelity
+level already established by those adapters (no physics-based collision yet). They
+drive the PointNav and ObjectNav benchmark harnesses in `scripts/run_isaacsim_pointnav.py`
+and `scripts/run_isaacsim_objectnav.py`; see docs/dependency-decisions.md for verified
+environment facts and docs/limitations.md for fidelity caveats.
 
 ## 5. Core Contracts
 
