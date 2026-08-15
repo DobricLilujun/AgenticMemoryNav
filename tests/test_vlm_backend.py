@@ -89,6 +89,49 @@ def test_vlm_backend_parses_object_list(monkeypatch):
     assert objects[0].attributes["color"] == "red"
 
 
+def test_vlm_backend_sends_thinking_switch_at_top_level(monkeypatch):
+    """vLLM ignores a nested `extra_body`, which silently re-enables reasoning output."""
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured.update(json.loads(request.data.decode("utf-8")))
+        return DummyResponse({"choices": [{"message": {"content": '{"objects": []}'}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    backend = VLMBackend(
+        model_id="demo-model",
+        base_url="http://example.com/v1",
+        api="openai-completions",
+    )
+    frame = FrameObservation(
+        frame_id="frame_0",
+        timestamp=0.0,
+        rgb=np.zeros((64, 96, 3), dtype=np.uint8),
+        depth=np.full((64, 96), 2.0, dtype=np.float32),
+        camera_intrinsics=CameraIntrinsics(80.0, 80.0, 48.0, 32.0, 96, 64),
+        camera_pose=Pose3D(position=(0.0, 0.0, 0.0), yaw=0.0),
+        robot_pose=Pose3D(position=(0.0, 0.0, 0.0), yaw=0.0),
+    )
+    mapping = MappingUpdate(
+        frame_id=frame.frame_id,
+        timestamp=frame.timestamp,
+        camera_pose=frame.camera_pose,
+        depth=frame.depth,
+        confidence=np.ones_like(frame.depth, dtype=np.float32),
+        local_pointcloud=np.zeros((1, 3), dtype=np.float32),
+        global_pointcloud=np.zeros((1, 3), dtype=np.float32),
+        is_keyframe=True,
+        map_version=1,
+        provenance=["test"],
+    )
+
+    backend.detect(frame, mapping)
+
+    assert captured["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "extra_body" not in captured
+
+
 def test_vlm_backend_extracts_json_from_reasoning_response(monkeypatch):
     payload = {
         "choices": [

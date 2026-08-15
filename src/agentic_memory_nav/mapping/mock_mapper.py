@@ -59,7 +59,8 @@ class MockMapper:
     def _backproject(depth: np.ndarray, pose: Pose3D) -> np.ndarray:
         height, width = depth.shape
         ys, xs = np.mgrid[0:height:4, 0:width:4]
-        z = depth[ys, xs]
+        # Real sensors (e.g. Isaac Sim) report inf/nan depth for sky/no-hit pixels.
+        z = np.nan_to_num(depth[ys, xs], nan=0.0, posinf=0.0, neginf=0.0)
         x = (xs - width / 2) / max(width, 1) * z + pose.position[0]
         y = (ys - height / 2) / max(height, 1) * z + pose.position[1]
         return np.stack((x, y, z + pose.position[2]), axis=-1).reshape(-1, 3).astype(np.float32)

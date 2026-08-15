@@ -22,8 +22,16 @@ from agentic_memory_nav.execution.safety_controller import SafetyController, Saf
 
 _SIMULATION_APP: Any | None = None
 
+# Camera() defaults to looking down its local -Z axis; on this z-up stage that means
+# straight at the floor unless rotated to face the robot's +X direction of travel.
+_FORWARD_CAMERA_ORIENTATION_WXYZ = np.array([0.5, 0.5, -0.5, -0.5], dtype=np.float32)
 
-def _ensure_simulation_app(headless: bool = True) -> Any:
+
+def _ensure_simulation_app(
+    headless: bool = True,
+    livestream_args: list[str] | None = None,
+    window_resolution: tuple[int, int] | None = None,
+) -> Any:
     """Isaac Sim allows only one SimulationApp per process; reuse it if already started."""
     global _SIMULATION_APP
     if _SIMULATION_APP is None:
@@ -31,7 +39,32 @@ def _ensure_simulation_app(headless: bool = True) -> Any:
             raise RuntimeError("isaacsim is not importable; select execution.backend=unitree_sim")
         from isaacsim import SimulationApp  # type: ignore[import-not-found]
 
-        _SIMULATION_APP = SimulationApp({"headless": headless})
+        if livestream_args is not None:
+            # The trimmed-down "base.python" experience has no WebRTC livestream
+            # extension; the full streaming experience is required to serve a stream.
+            experience = str(Path("~/isaacsim/apps/isaacsim.exp.full.streaming.kit").expanduser())
+            config: dict[str, Any] = {
+                "headless": headless,
+                "hide_ui": False,
+                "extra_args": livestream_args,
+            }
+            if window_resolution is not None:
+                # The WebRTC client negotiates a max frame size on connect (often
+                # 1280x720); a mismatched window/render resolution makes the plugin
+                # drop every frame with "exceeds the max of ..." warnings.
+                width, height = window_resolution
+                config["width"] = width
+                config["height"] = height
+                config["extra_args"] = [
+                    *livestream_args,
+                    f"--/app/window/width={width}",
+                    f"--/app/window/height={height}",
+                    f"--/app/renderer/resolution/width={width}",
+                    f"--/app/renderer/resolution/height={height}",
+                ]
+            _SIMULATION_APP = SimulationApp(config, experience=experience)
+        else:
+            _SIMULATION_APP = SimulationApp({"headless": headless})
     return _SIMULATION_APP
 
 
@@ -66,13 +99,22 @@ class IsaacSimExecutor:
         dt: float = 0.1,
         camera_resolution: tuple[int, int] = (64, 96),
         headless: bool = True,
+        livestream_args: list[str] | None = None,
+        window_resolution: tuple[int, int] | None = None,
     ) -> None:
         if importlib.util.find_spec("isaacsim") is None:
             raise RuntimeError("isaacsim is not importable in this Python environment")
-        if scene and not Path(scene).expanduser().exists():
+        # NVIDIA's SimReady environments (Warehouse/Office/...) are served from a remote
+        # Nucleus/CDN URL rather than a local path; only local paths must exist on disk.
+        is_remote = isinstance(scene, str) and "://" in scene
+        if scene and not is_remote and not Path(scene).expanduser().exists():
             raise FileNotFoundError(f"Isaac Sim scene not found: {scene}")
 
-        self.scene = str(Path(scene).expanduser().resolve()) if scene else None
+        self.scene = (
+            scene
+            if (scene and is_remote)
+            else (str(Path(scene).expanduser().resolve()) if scene else None)
+        )
         self.safety = safety
         self.max_speed = min(max_speed, safety.max_speed)
         self.dt = dt
@@ -82,18 +124,45 @@ class IsaacSimExecutor:
         self._yaw = 0.0
         self._camera_resolution = camera_resolution
 
-        self._simulation_app = _ensure_simulation_app(headless=headless)
+        self._simulation_app = _ensure_simulation_app(
+            headless=headless,
+            livestream_args=livestream_args,
+            window_resolution=window_resolution,
+        )
 
         # Imported lazily so mock-only workflows never require Isaac Sim dependencies.
         from isaacsim.core.api import World  # type: ignore[import-not-found]
-        from isaacsim.core.api.objects import DynamicCuboid  # type: ignore[import-not-found]
+        from isaacsim.core.api.objects import (  # type: ignore[import-not-found]
+            DynamicCuboid,
+            GroundPlane,
+        )
         from isaacsim.sensors.camera import Camera  # type: ignore[import-not-found]
 
         self._world = World(stage_units_in_meters=1.0)
-        self._world.scene.add_default_ground_plane()
         if self.scene:
+            # SimReady environments (e.g. NVIDIA Warehouse/Office) ship their own floor,
+            # walls, and lighting; adding our procedural ones on top only causes
+            # z-fighting and washes out their authored materials.
             self._load_scene_layer(self.scene)
         else:
+            # `add_default_ground_plane()` references a large "Grid" reference environment
+            # asset with horizon markings; at robot-eye-level that dominates the whole
+            # forward-facing frame. A plain flat plane keeps the same physics collider
+            # without that distracting backdrop.
+            self._world.scene.add(
+                GroundPlane(
+                    prim_path="/World/groundPlane",
+                    z_position=0.0,
+                    color=np.array([0.4, 0.4, 0.4], dtype=np.float32),
+                )
+            )
+            # A bare stage has no usable illumination; match the verified recorder setup
+            # (scripts/record_isaacsim_sequence.py) so RGB frames aren't near-black.
+            from pxr import UsdLux  # type: ignore[import-not-found]
+
+            UsdLux.DomeLight.Define(
+                self._world.stage, "/World/realtime_agent_dome_light"
+            ).CreateIntensityAttr(1000.0)
             self._add_procedural_obstacles()
 
         self._robot = self._world.scene.add(
@@ -108,6 +177,7 @@ class IsaacSimExecutor:
         self._camera = Camera(
             prim_path="/World/robot/camera",
             position=np.array([0.0, 0.0, 0.35], dtype=np.float32),
+            orientation=_FORWARD_CAMERA_ORIENTATION_WXYZ,
             resolution=(width, height),
         )
         self._world.reset()
@@ -140,6 +210,27 @@ class IsaacSimExecutor:
     def _pose_to_usd(self, position: Vector3) -> np.ndarray:
         x, z_up, y_north = position
         return np.array([x, y_north, z_up], dtype=np.float32)
+
+    def spawn_object(
+        self,
+        name: str,
+        position: Vector3,
+        color: tuple[float, float, float] = (1.0, 0.0, 0.0),
+        scale: float = 0.15,
+    ) -> None:
+        """Place a real, physically-simulated target cuboid for ObjectNav-style search tasks."""
+        from isaacsim.core.api.objects import DynamicCuboid  # type: ignore[import-not-found]
+
+        self._world.scene.add(
+            DynamicCuboid(
+                prim_path=f"/World/{name}",
+                name=name,
+                position=self._pose_to_usd(position),
+                scale=np.array([scale, scale, scale], dtype=np.float32),
+                color=np.array(color, dtype=np.float32),
+            )
+        )
+        self._world.reset()
 
     def reset(self) -> None:
         self._frame_index = 0

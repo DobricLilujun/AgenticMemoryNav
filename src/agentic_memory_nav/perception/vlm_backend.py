@@ -134,7 +134,10 @@ class VLMBackend:
             "max_tokens": 2048,
         }
         if self.api == "openai-completions":
-            payload["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+            # `extra_body` is an OpenAI *client* construct that the client flattens into
+            # the request body. This backend posts raw HTTP, so the field must be sent at
+            # the top level or vLLM silently ignores it and keeps emitting reasoning text.
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         return payload
 
     def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:

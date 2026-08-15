@@ -25,7 +25,10 @@ from agentic_memory_nav.common.types import (
     Vector3,
 )
 from agentic_memory_nav.datasets.objectnav import ObjectNavExperiment
-from agentic_memory_nav.execution.isaacsim_adapter import _ensure_simulation_app
+from agentic_memory_nav.execution.isaacsim_adapter import (
+    _FORWARD_CAMERA_ORIENTATION_WXYZ,
+    _ensure_simulation_app,
+)
 from agentic_memory_nav.execution.safety_controller import SafetyController, SafetyError
 
 
@@ -86,6 +89,7 @@ class IsaacSimObjectNavExecutor:
         self._camera = Camera(
             prim_path="/World/robot/camera",
             position=np.array([0.0, 0.0, 0.35], dtype=np.float32),
+            orientation=_FORWARD_CAMERA_ORIENTATION_WXYZ,
             resolution=(width, height),
         )
         self._world.reset()
