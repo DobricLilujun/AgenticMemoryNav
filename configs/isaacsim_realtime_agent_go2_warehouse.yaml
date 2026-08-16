@@ -1,7 +1,7 @@
 runtime:
   output_root: outputs
-  max_steps: 50
-  instruction: "Find the red cup in the digital twin warehouse"
+  max_steps: 400
+  instruction: "Find the red cup in the warehouse"
 
 mapping:
   backend: mock
@@ -16,10 +16,15 @@ perception:
   timeout: 120.0
 
 execution:
-  # NVIDIA Digital Twin Warehouse environment. This is a more realistic, denser
-  # warehouse interior than the simplified warehouse demo and is intended for
-  # multi-zone search, occlusion, and long-horizon navigation.
   scene: /home/snt/isaacsim_assets/Assets/Isaac/6.0/Isaac/Environments/Modular_Warehouse/Props/warehouse_10m_all_new.usd
+  # Unitree Go2 as the moving body; held rigid and driven kinematically, since this
+  # project has no gait controller to keep an articulated quadruped standing.
+  robot_usd: /home/snt/isaacsim_assets/Assets/Isaac/6.0/Isaac/IsaacLab/Robots/Unitree/Go2/go2.usd
+  # Point the streamed viewport at the Go2's head-mounted lens, not the default persp camera.
+  bind_viewport_to_camera: true
+  # (x, height_up, north). The warehouse spans USD x [-22.5, 2.5], y [-1.3, 11.0],
+  # so the origin is outside the building and renders as empty black.
+  robot_start: [-10.0, 0.4, 5.0]
   max_speed: 0.38
   max_angular_speed: 0.8
   max_action_timeout: 20.0
@@ -29,13 +34,5 @@ execution:
   waypoint_duration_s: 5.0
   # Must match the WebRTC client's negotiated max resolution when using --livestream,
   # or the client rejects every frame with "exceeds the max of ..." warnings.
-  stream_width: 1920
-  stream_height: 1080
-  # Explicitly bind the primary camera to the scene's default perspective camera
-  # so the livestream client sees the warehouse instead of a black viewport.
-  primary_camera: /OmniverseKit_Persp
-  livestream_bind_camera: true
-  livestream_use_main_render: true
-  enable_all_layers: true
-  enable_usd_sync_loads: true
-  enable_material_sync_loads: true
+  stream_width: 1280
+  stream_height: 720

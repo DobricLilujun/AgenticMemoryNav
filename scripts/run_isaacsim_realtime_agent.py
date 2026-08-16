@@ -159,6 +159,9 @@ def main() -> int:
     logger = configure_logging(run.path / "logs.jsonl", verbose=False)
     rgb_dir = run.artifacts / "rgb"
     rgb_dir.mkdir(exist_ok=True)
+    overhead_rgb_dir = run.artifacts / "overhead_rgb"
+    if execution.get("overhead_camera_position"):
+        overhead_rgb_dir.mkdir(exist_ok=True)
 
     live_view = None
     if not args.no_view:
@@ -207,6 +210,23 @@ def main() -> int:
         headless=bool(execution.get("headless", True)),
         livestream_args=livestream_args,
         window_resolution=window_resolution,
+        robot_usd=execution.get("robot_usd"),
+        bind_viewport_to_camera=bool(execution.get("bind_viewport_to_camera", False)),
+        scene_up_axis=str(execution.get("scene_up_axis", "z")),
+        overhead_camera_position=(
+            tuple(float(value) for value in execution["overhead_camera_position"])
+            if execution.get("overhead_camera_position")
+            else None
+        ),
+        head_scan_yaw_deg=float(execution.get("head_scan_yaw_deg", 0.0)),
+        head_scan_pitch_deg=float(execution.get("head_scan_pitch_deg", 0.0)),
+        head_scan_period_frames=int(execution.get("head_scan_period_frames", 1)),
+        validate_initial_placement=bool(execution.get("validate_initial_placement", False)),
+        initial_robot_position=(
+            tuple(float(value) for value in execution["robot_start"])
+            if execution.get("robot_start")
+            else None
+        ),
     )
 
     objectnav = config.section("objectnav")
@@ -224,10 +244,6 @@ def main() -> int:
     step_results = []
     try:
         executor.reset()
-        if execution.get("robot_start"):
-            # SimReady environments (e.g. NVIDIA Warehouse) aren't centered on an open
-            # floor at (0, 0); let the config place the robot in walkable space.
-            executor.teleport(tuple(float(v) for v in execution["robot_start"]))
         for step in range(max_steps):
             step_start = time.perf_counter()
             frame = executor.get_observation()  # live Isaac Sim render: real RGB + pose
@@ -236,6 +252,9 @@ def main() -> int:
             Image.fromarray(frame.rgb).save(rgb_dir / f"frame_{step:04d}.png")
             if live_view is not None:
                 live_view.update(frame.rgb)
+            overhead_rgb = executor.get_overhead_rgb()
+            if overhead_rgb is not None:
+                Image.fromarray(overhead_rgb).save(overhead_rgb_dir / f"frame_{step:04d}.png")
             snapshot = memory_agent.ingest_frame(frame)
             robot_pose = executor.get_state()
             plan = navigation_agent.decide(

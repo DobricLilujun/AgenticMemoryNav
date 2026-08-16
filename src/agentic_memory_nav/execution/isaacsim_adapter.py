@@ -26,6 +26,68 @@ _SIMULATION_APP: Any | None = None
 # straight at the floor unless rotated to face the robot's +X direction of travel.
 _FORWARD_CAMERA_ORIENTATION_WXYZ = np.array([0.5, 0.5, -0.5, -0.5], dtype=np.float32)
 
+# Body origin height and head-mounted camera offset for the Unitree Go2 asset, whose
+# authored default pose is standing. The camera sits clear of the head mesh, which
+# otherwise occludes the lower half of the frame.
+_GO2_BASE_HEIGHT_M = 0.40
+_GO2_CAMERA_OFFSET_M = (0.42, 0.0, 0.14)
+_GO2_STANDING_HALF_EXTENTS_M = (0.34, 0.20, 0.30)
+_CUBOID_BASE_HEIGHT_M = 0.15
+
+
+def _yaw_to_quat_wxyz(yaw: float) -> np.ndarray:
+    half = yaw * 0.5
+    return np.array([math.cos(half), 0.0, 0.0, math.sin(half)], dtype=np.float32)
+
+
+def _quat_multiply_wxyz(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    left_w, left_x, left_y, left_z = left
+    right_w, right_x, right_y, right_z = right
+    return np.array(
+        [
+            left_w * right_w - left_x * right_x - left_y * right_y - left_z * right_z,
+            left_w * right_x + left_x * right_w + left_y * right_z - left_z * right_y,
+            left_w * right_y - left_x * right_z + left_y * right_w + left_z * right_x,
+            left_w * right_z + left_x * right_y - left_y * right_x + left_z * right_w,
+        ],
+        dtype=np.float32,
+    )
+
+
+def _axis_angle_quat_wxyz(axis: tuple[float, float, float], angle: float) -> np.ndarray:
+    half = angle * 0.5
+    scale = math.sin(half)
+    return np.array(
+        [math.cos(half), axis[0] * scale, axis[1] * scale, axis[2] * scale],
+        dtype=np.float32,
+    )
+
+
+def _freeze_articulation(stage: Any, root_path: str) -> None:
+    """Keep a referenced robot rigid and upright without a locomotion controller.
+
+    The Go2 asset is a physics articulation; without a gait controller it collapses
+    under gravity, so its bodies are made kinematic and driven by the parent Xform.
+    """
+    from pxr import Sdf, Usd, UsdPhysics  # type: ignore[import-not-found]
+
+    root = stage.GetPrimAtPath(root_path)
+    if not root:
+        return
+    for prim in Usd.PrimRange(root):
+        if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+            attribute = prim.GetAttribute("physics:articulationEnabled")
+            if not attribute:
+                attribute = prim.CreateAttribute(
+                    "physics:articulationEnabled", Sdf.ValueTypeNames.Bool
+                )
+            attribute.Set(False)
+        if prim.IsA(UsdPhysics.Joint):
+            # Kinematic bodies can't be jointed; leaving these on spams PhysX errors.
+            UsdPhysics.Joint(prim).CreateJointEnabledAttr(False)
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            UsdPhysics.RigidBodyAPI(prim).CreateKinematicEnabledAttr(True)
+
 
 def _ensure_simulation_app(
     headless: bool = True,
@@ -101,6 +163,15 @@ class IsaacSimExecutor:
         headless: bool = True,
         livestream_args: list[str] | None = None,
         window_resolution: tuple[int, int] | None = None,
+        robot_usd: str | None = None,
+        bind_viewport_to_camera: bool = False,
+        scene_up_axis: str = "z",
+        overhead_camera_position: Vector3 | None = None,
+        head_scan_yaw_deg: float = 0.0,
+        head_scan_pitch_deg: float = 0.0,
+        head_scan_period_frames: int = 1,
+        validate_initial_placement: bool = False,
+        initial_robot_position: Vector3 | None = None,
     ) -> None:
         if importlib.util.find_spec("isaacsim") is None:
             raise RuntimeError("isaacsim is not importable in this Python environment")
@@ -115,6 +186,9 @@ class IsaacSimExecutor:
             if (scene and is_remote)
             else (str(Path(scene).expanduser().resolve()) if scene else None)
         )
+        if robot_usd and not Path(robot_usd).expanduser().exists():
+            raise FileNotFoundError(f"Isaac Sim robot USD not found: {robot_usd}")
+        self.robot_usd = str(Path(robot_usd).expanduser().resolve()) if robot_usd else None
         self.safety = safety
         self.max_speed = min(max_speed, safety.max_speed)
         self.dt = dt
@@ -123,6 +197,15 @@ class IsaacSimExecutor:
         self._stopped = True
         self._yaw = 0.0
         self._camera_resolution = camera_resolution
+        self._head_scan_yaw_rad = math.radians(head_scan_yaw_deg)
+        self._head_scan_pitch_rad = math.radians(head_scan_pitch_deg)
+        self._head_scan_period_frames = max(1, head_scan_period_frames)
+        self._validate_initial_placement = validate_initial_placement
+        self._initial_robot_position_usd = (
+            self._pose_to_usd(initial_robot_position)
+            if initial_robot_position is not None
+            else np.array([0.0, 0.0, _GO2_BASE_HEIGHT_M], dtype=np.float32)
+        )
 
         self._simulation_app = _ensure_simulation_app(
             headless=headless,
@@ -143,7 +226,10 @@ class IsaacSimExecutor:
             # SimReady environments (e.g. NVIDIA Warehouse/Office) ship their own floor,
             # walls, and lighting; adding our procedural ones on top only causes
             # z-fighting and washes out their authored materials.
-            self._load_scene_layer(self.scene)
+            self._load_scene_layer(self.scene, scene_up_axis)
+            self._ensure_scene_lighting()
+            if self._validate_initial_placement:
+                self._enable_scene_collisions()
         else:
             # `add_default_ground_plane()` references a large "Grid" reference environment
             # asset with horizon markings; at robot-eye-level that dominates the whole
@@ -165,30 +251,138 @@ class IsaacSimExecutor:
             ).CreateIntensityAttr(1000.0)
             self._add_procedural_obstacles()
 
-        self._robot = self._world.scene.add(
-            DynamicCuboid(
-                prim_path="/World/robot",
-                name="robot",
-                position=np.array([0.0, 0.0, 0.15], dtype=np.float32),
-                scale=np.array([0.3, 0.3, 0.3], dtype=np.float32),
+        if self.robot_usd:
+            from isaacsim.core.prims import SingleXFormPrim  # type: ignore[import-not-found]
+            from isaacsim.core.utils.stage import (  # type: ignore[import-not-found]
+                add_reference_to_stage,
             )
-        )
+
+            self._base_height = _GO2_BASE_HEIGHT_M
+            camera_offset = np.array(_GO2_CAMERA_OFFSET_M, dtype=np.float32)
+            add_reference_to_stage(self.robot_usd, "/World/robot")
+            _freeze_articulation(self._world.stage, "/World/robot")
+            self._robot = SingleXFormPrim(
+                "/World/robot",
+                name="robot",
+                position=self._initial_robot_position_usd,
+            )
+        else:
+            self._base_height = _CUBOID_BASE_HEIGHT_M
+            camera_offset = np.array([0.0, 0.0, 0.35], dtype=np.float32)
+            self._robot = self._world.scene.add(
+                DynamicCuboid(
+                    prim_path="/World/robot",
+                    name="robot",
+                    position=self._initial_robot_position_usd,
+                    scale=np.array([0.3, 0.3, 0.3], dtype=np.float32),
+                )
+            )
         height, width = camera_resolution
+        # Parented to the robot Xform, so the lens follows the body's position and yaw.
         self._camera = Camera(
-            prim_path="/World/robot/camera",
-            position=np.array([0.0, 0.0, 0.35], dtype=np.float32),
+            prim_path="/World/robot/agent_camera",
+            position=camera_offset,
             orientation=_FORWARD_CAMERA_ORIENTATION_WXYZ,
             resolution=(width, height),
         )
+        self._overhead_camera = None
+        if overhead_camera_position is not None:
+            self._overhead_camera = Camera(
+                prim_path="/World/overhead_camera",
+                position=self._pose_to_usd(overhead_camera_position),
+                # Camera() looks along local -Z, so identity is a vertical top-down view.
+                orientation=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+                resolution=(width, height),
+            )
         self._world.reset()
+        self._set_robot_pose(self._initial_robot_position_usd, yaw=0.0)
+        for _ in range(2):
+            self._world.step(render=False)
+        if self._validate_initial_placement:
+            self._validate_robot_placement()
         self._camera.initialize()
         self._camera.add_distance_to_image_plane_to_frame()
+        if self._overhead_camera is not None:
+            self._overhead_camera.initialize()
+        if bind_viewport_to_camera:
+            self._bind_viewport("/World/robot/agent_camera")
         for _ in range(3):
             self._world.step(render=True)
 
-    def _load_scene_layer(self, scene: str) -> None:
+    def _bind_viewport(self, camera_path: str) -> None:
+        """Point the streamed viewport at the robot's own lens instead of the default persp camera."""
+        from omni.kit.viewport.utility import (  # type: ignore[import-not-found]
+            get_active_viewport,
+        )
+
+        viewport = get_active_viewport()
+        if viewport is not None:
+            viewport.camera_path = camera_path
+
+    def _load_scene_layer(self, scene: str, up_axis: str = "z") -> None:
+        if up_axis.lower() == "y":
+            from isaacsim.core.prims import SingleXFormPrim  # type: ignore[import-not-found]
+            from isaacsim.core.utils.stage import (  # type: ignore[import-not-found]
+                add_reference_to_stage,
+            )
+
+            # A Y-up asset (e.g. GLB converted to USD) needs +90 deg about X on this Z-up stage.
+            add_reference_to_stage(scene, "/World/scene")
+            SingleXFormPrim(
+                "/World/scene",
+                name="scene",
+                orientation=np.array([0.70710678, 0.70710678, 0.0, 0.0], dtype=np.float32),
+            )
+            return
         stage = self._world.stage
         stage.GetRootLayer().subLayerPaths.append(scene)
+
+    def _ensure_scene_lighting(self) -> None:
+        """Some environment assets (e.g. Modular_Warehouse props) ship geometry but no lights."""
+        from pxr import UsdLux  # type: ignore[import-not-found]
+
+        stage = self._world.stage
+        if any(prim.HasAPI(UsdLux.LightAPI) for prim in stage.Traverse()):
+            return
+        UsdLux.DomeLight.Define(
+            stage, "/World/realtime_agent_dome_light"
+        ).CreateIntensityAttr(1000.0)
+
+    def _enable_scene_collisions(self) -> None:
+        """Make imported render meshes queryable as static PhysX environment colliders."""
+        from pxr import UsdGeom, UsdPhysics  # type: ignore[import-not-found]
+
+        for prim in self._world.stage.Traverse():
+            if prim.IsA(UsdGeom.Mesh) and UsdGeom.Mesh(prim).GetPointsAttr().Get():
+                UsdPhysics.CollisionAPI.Apply(prim)
+
+    def _validate_robot_placement(self) -> None:
+        """Abort before the loop when the Go2 standing volume intersects the environment."""
+        import carb  # type: ignore[import-not-found]
+        from omni.physx import get_physx_scene_query_interface  # type: ignore[import-not-found]
+
+        position, _ = self._robot.get_world_pose()
+        hits: list[str] = []
+
+        def report_overlap(hit: Any) -> bool:
+            collider = str(hit.rigid_body)
+            if not collider.startswith("/World/robot"):
+                hits.append(collider)
+            return True
+
+        half_x, half_y, half_z = _GO2_STANDING_HALF_EXTENTS_M
+        get_physx_scene_query_interface().overlap_box(
+            carb.Float3(half_x, half_y, half_z),
+            carb.Float3(*position),
+            carb.Float4(0.0, 0.0, 0.0, 1.0),
+            report_overlap,
+            False,
+        )
+        if hits:
+            raise RuntimeError(
+                "Go2 initial placement overlaps environment colliders: "
+                + ", ".join(sorted(set(hits))[:5])
+            )
 
     def _add_procedural_obstacles(self) -> None:
         from isaacsim.core.api.objects import FixedCuboid  # type: ignore[import-not-found]
@@ -210,6 +404,35 @@ class IsaacSimExecutor:
     def _pose_to_usd(self, position: Vector3) -> np.ndarray:
         x, z_up, y_north = position
         return np.array([x, y_north, z_up], dtype=np.float32)
+
+    def _set_robot_pose(self, position_usd: np.ndarray, yaw: float | None = None) -> None:
+        if yaw is not None:
+            self._yaw = yaw
+        self._robot.set_world_pose(
+            position=position_usd, orientation=_yaw_to_quat_wxyz(self._yaw)
+        )
+
+    def _update_head_camera_scan(self) -> None:
+        phase = 2.0 * math.pi * self._frame_index / self._head_scan_period_frames
+        scan_yaw = self._head_scan_yaw_rad * math.sin(phase)
+        scan_pitch = self._head_scan_pitch_rad * math.sin(phase * 0.5)
+        orientation = _quat_multiply_wxyz(
+            _FORWARD_CAMERA_ORIENTATION_WXYZ,
+            _quat_multiply_wxyz(
+                _axis_angle_quat_wxyz((0.0, 0.0, 1.0), scan_yaw),
+                _axis_angle_quat_wxyz((1.0, 0.0, 0.0), scan_pitch),
+            ),
+        )
+        self._camera.set_local_pose(orientation=orientation)
+
+    def get_overhead_rgb(self) -> np.ndarray | None:
+        """Return the observer camera frame; this is never passed to the agent."""
+        if self._overhead_camera is None:
+            return None
+        rgba = self._overhead_camera.get_rgba()
+        if rgba is None or not rgba.size:
+            return None
+        return rgba[:, :, :3].astype(np.uint8)
 
     def spawn_object(
         self,
@@ -236,8 +459,9 @@ class IsaacSimExecutor:
         self._frame_index = 0
         self._collision = False
         self._stopped = True
-        self._yaw = 0.0
-        self._robot.set_world_pose(position=np.array([0.0, 0.0, 0.15], dtype=np.float32))
+        self._set_robot_pose(
+            self._initial_robot_position_usd, yaw=0.0
+        )
         self._world.reset()
 
     def get_state(self) -> Pose3D:
@@ -246,12 +470,12 @@ class IsaacSimExecutor:
 
     def teleport(self, position: Vector3) -> None:
         """Place the robot at an arbitrary pose; used by benchmark harnesses only."""
-        self._robot.set_world_pose(position=self._pose_to_usd(position))
-        self._yaw = 0.0
+        self._set_robot_pose(self._pose_to_usd(position), yaw=0.0)
         self._collision = False
         self._frame_index = 0
 
     def get_observation(self) -> FrameObservation:
+        self._update_head_camera_scan()
         self._world.step(render=True)
         rgba = self._camera.get_rgba()
         height, width = self._camera_resolution
@@ -285,8 +509,7 @@ class IsaacSimExecutor:
 
         position, _ = self._robot.get_world_pose()
         position = position + np.array([vx * self.dt, vy * self.dt, 0.0], dtype=np.float32)
-        self._robot.set_world_pose(position=position)
-        self._yaw += wz * self.dt
+        self._set_robot_pose(position, yaw=self._yaw + wz * self.dt)
         self._stopped = False
         self._world.step(render=False)
         return ExecutionFeedback(
@@ -331,8 +554,7 @@ class IsaacSimExecutor:
         travel = min(distance, self.max_speed * intent.duration)
         direction = delta / max(distance, 1e-9)
         destination = current_usd + direction * travel
-        self._robot.set_world_pose(position=destination)
-        self._yaw = math.atan2(float(delta[1]), float(delta[0]))
+        self._set_robot_pose(destination, yaw=math.atan2(float(delta[1]), float(delta[0])))
         self._stopped = False
         self._world.step(render=False)
         reached = travel >= distance - 1e-6

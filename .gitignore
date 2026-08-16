@@ -13,3 +13,4 @@ dist/
 *.egg-info/
 outputs/
 .lingbot-venv/
+issacsim-assets/
