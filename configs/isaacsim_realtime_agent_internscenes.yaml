@@ -19,13 +19,36 @@ execution:
   # Converted InternScenes scene. It is Y-up, so the executor reorients it onto its Z-up stage.
   scene: /home/snt/projects/AgenticMemoryNav/issacsim-assets/scene0000_00/usd/scene.usd
   scene_up_axis: y
-  robot_usd: /home/snt/projects/AgenticMemoryNav/issacsim-assets/Go2/go2.usd
-  # (x, height_up, north). PhysX overlap scan verified this standing pose is clear.
-  robot_start: [0.0, 0.4, 0.5]
+  light_rig: gray_studio
+  robot_usd: /home/snt/projects/AgenticMemoryNav/issacsim-assets/Go2/configuration/go2_description_physics.usd
+  # Freeze all leg joints; navigation controls only translate/rotate the complete Go2 body.
+  robot_motion_mode: kinematic
+  # (x, height_up, north). PhysX overlap scan with the active Go2 articulation verified it.
+  robot_start: [2.59, 0.35, 1.0]
   # Reject initialization before the agent loop if the Go2 standing volume hits a scene collider.
   validate_initial_placement: true
+  # Plane dimensions and center are derived from the loaded scene USD world bounds.
+  environment_planes:
+    ground:
+      enabled: true
+      prim_path: /World/GroundPlane
+      margin_m: 0.5
+      z_offset_m: -0.02
+      color: [0.18, 0.20, 0.22]
+      collision_enabled: true
+    ceiling:
+      enabled: true
+      prim_path: /World/CeilingPlane
+      margin_m: 0.5
+      z_offset_m: 0.02
+      color: [0.82, 0.84, 0.88]
+      collision_enabled: true
   # The overhead observer is recorded separately; its RGB is never sent to MemoryAgent.
-  overhead_camera_position: [0.0, 6.0, 0.0]
+  overhead_camera_position: [0.0, 0.0, 30.0]
+  # WebRTC starts in this observer view. Set to "head" to stream the Go2 lens instead.
+  livestream_camera: overhead
+  # Keep the Isaac Sim WebRTC stream alive after a preview or agent run completes.
+  keep_streaming: true
   # Small periodic look-around motion for the head lens, in addition to the body yaw.
   head_scan_yaw_deg: 20.0
   head_scan_pitch_deg: 10.0
@@ -37,6 +60,8 @@ execution:
   headless: true
   camera_width: 320
   camera_height: 240
+  # Applied to both the Go2 head camera and the overhead observer; valid range is 30-60.
+  camera_fps: 30
   waypoint_duration_s: 5.0
   # Must match the WebRTC client's negotiated max resolution when using --livestream.
   stream_width: 1280

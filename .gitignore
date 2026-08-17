@@ -14,3 +14,4 @@ dist/
 outputs/
 .lingbot-venv/
 issacsim-assets/
+NvStreamer-*

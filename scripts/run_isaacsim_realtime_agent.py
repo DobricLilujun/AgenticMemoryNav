@@ -183,12 +183,16 @@ def main() -> int:
     )
     livestream_args = None
     window_resolution = None
+    camera_fps = int(execution.get("camera_fps", 30))
+    if not 30 <= camera_fps <= 60:
+        raise ValueError(f"execution.camera_fps must be between 30 and 60, got {camera_fps}")
     if args.livestream:
         public_ip = _resolve_public_ip(args.public_ip)
         livestream_args = [
             f"--/exts/omni.kit.livestream.app/primaryStream/publicIp={public_ip}",
             "--/exts/omni.kit.livestream.app/primaryStream/signalPort=49100",
             "--/exts/omni.kit.livestream.app/primaryStream/streamPort=47998",
+            f"--/exts/omni.kit.livestream.app/primaryStream/targetFps={camera_fps}",
         ]
         # The WebRTC client negotiates a max frame size on connect; a mismatched
         # window/render resolution makes the plugin drop every frame.
@@ -198,6 +202,7 @@ def main() -> int:
         )
         print(f"Livestream: WebRTC signal at {public_ip}:49100 (stream port 47998)")
         print(f"Livestream resolution: {window_resolution[0]}x{window_resolution[1]}")
+        print(f"Camera and livestream target FPS: {camera_fps}")
 
     executor = IsaacSimExecutor(
         scene=execution.get("scene"),
@@ -227,6 +232,11 @@ def main() -> int:
             if execution.get("robot_start")
             else None
         ),
+        camera_fps=camera_fps,
+        livestream_camera=str(execution.get("livestream_camera", "head")),
+        environment_planes=dict(execution.get("environment_planes", {})),
+        robot_motion_mode=str(execution.get("robot_motion_mode", "kinematic")),
+        light_rig=str(execution.get("light_rig", "gray_studio")),
     )
 
     objectnav = config.section("objectnav")
@@ -310,6 +320,12 @@ def main() -> int:
             live_view.close()
         memory_agent.close()
         run.close()
+        if args.livestream and bool(execution.get("keep_streaming", False)):
+            print(
+                "Experiment complete; WebRTC stream remains active. Press Ctrl+C to stop.",
+                flush=True,
+            )
+            executor.stream_until_interrupted()
         # Isaac Sim's executor.close() terminates the SimulationApp/process; do it last.
         executor.close()
 
