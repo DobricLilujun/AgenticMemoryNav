@@ -3,14 +3,9 @@
 
 The preview creates the scene, dynamic-bound ground/ceiling planes, and kinematic
 Go2, then optionally applies a short translation/turn motion with PhysX pre-checks.
-`--motion translate` moves the Go2 straight forward (no turn) so the WebRTC viewer
-can confirm the body is actually moving; `--motion translate_turn` also turns;
-`--motion stationary` holds the robot still. The agent camera itself stays static
-and only looks around on demand, so a moving body shows as motion in the view.
 Run with Isaac Sim's Python:
     ~/isaacsim/python.sh scripts/preview_isaacsim_navigation.py \
-        --config configs/isaacsim_realtime_agent_internscenes.yaml --livestream \
-        --motion translate
+        --config configs/isaacsim_realtime_agent_internscenes.yaml --livestream
 """
 
 from __future__ import annotations
@@ -32,41 +27,11 @@ from agentic_memory_nav.execution.isaacsim_adapter import IsaacSimExecutor  # no
 from agentic_memory_nav.execution.safety_controller import SafetyController  # noqa: E402
 
 
-def _as_vector3(value: object, name: str) -> tuple[float, float, float] | None:
-    if value is None:
-        return None
-    if not isinstance(value, (list, tuple, np.ndarray)):
-        raise ValueError(f"{name} must be a sequence of 3 numbers, got {type(value).__name__}: {value!r}")
-    vector = tuple(float(item) for item in value)
-    if len(vector) != 3:
-        raise ValueError(f"{name} must contain exactly 3 values, got {vector!r}")
-    return vector
-
-
-def _parse_robot_start_pose(value: object, name: str) -> tuple[tuple[float, float, float] | None, float]:
-    if value is None:
-        return None, 0.0
-    if isinstance(value, dict):
-        position = value.get("position")
-        if position is None:
-            raise ValueError(f"{name} must define a 'position' list/tuple when using a mapping")
-        yaw_deg = float(value.get("yaw_deg", value.get("yaw", 0.0)))
-        return _as_vector3(position, f"{name}.position"), yaw_deg
-    if isinstance(value, (list, tuple, np.ndarray)):
-        sequence = tuple(float(item) for item in value)
-        if len(sequence) == 3:
-            return sequence, 0.0
-        if len(sequence) == 4:
-            return (sequence[0], sequence[1], sequence[2]), float(sequence[3])
-        raise ValueError(f"{name} must contain either 3 values or 4 values [x, y, z, yaw_deg]")
-    raise ValueError(f"{name} must be a 3D position, a 4D pose [x, y, z, yaw_deg], or a mapping")
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=str(ROOT / "configs/isaacsim_realtime_agent_internscenes.yaml"))
     parser.add_argument("--frames", type=int, default=180)
-    parser.add_argument("--motion", choices=("stationary", "translate", "translate_turn"), default="translate_turn")
+    parser.add_argument("--motion", choices=("stationary", "translate_turn"), default="translate_turn")
     parser.add_argument("--livestream", action="store_true")
     parser.add_argument("--public-ip", default="127.0.0.1")
     return parser.parse_args()
@@ -78,7 +43,6 @@ def main() -> int:
         raise ValueError("frames must be positive")
     config = load_config(args.config)
     execution = config.section("execution")
-    robot_start, robot_yaw_deg = _parse_robot_start_pose(execution.get("robot_start"), "robot_start")
     camera_fps = int(execution.get("camera_fps", 30))
     if not 30 <= camera_fps <= 60:
         raise ValueError(f"execution.camera_fps must be between 30 and 60, got {camera_fps}")
@@ -114,21 +78,31 @@ def main() -> int:
         robot_usd=execution.get("robot_usd"),
         bind_viewport_to_camera=bool(execution.get("bind_viewport_to_camera", False)),
         scene_up_axis=str(execution.get("scene_up_axis", "z")),
-        overhead_camera_position=_as_vector3(
-            execution.get("overhead_camera_position"), "overhead_camera_position"
+        overhead_camera_position=(
+            tuple(float(value) for value in execution["overhead_camera_position"])
+            if execution.get("overhead_camera_position")
+            else None
         ),
-        overhead_camera_orient=_as_vector3(
-            execution.get("overhead_camera_orient"), "overhead_camera_orient"
+        overhead_camera_orient=(
+            tuple(float(value) for value in execution["overhead_camera_orient"])
+            if execution.get("overhead_camera_orient") is not None
+            else None
         ),
-        go2_camera_orient=_as_vector3(execution.get("go2_camera_orient"), "go2_camera_orient"),
+        go2_camera_orient=(
+            tuple(float(value) for value in execution["go2_camera_orient"])
+            if execution.get("go2_camera_orient") is not None
+            else None
+        ),
         head_scan_yaw_deg=float(execution.get("head_scan_yaw_deg", 0.0)),
         head_scan_pitch_deg=float(execution.get("head_scan_pitch_deg", 0.0)),
         head_scan_period_frames=int(execution.get("head_scan_period_frames", 1)),
         validate_initial_placement=bool(execution.get("validate_initial_placement", True)),
-        initial_robot_position=robot_start,
-        initial_robot_yaw_deg=robot_yaw_deg,
+        initial_robot_position=(
+            tuple(float(value) for value in execution["robot_start"])
+            if execution.get("robot_start")
+            else None
+        ),
         camera_fps=camera_fps,
-        camera_focal_length=float(execution.get("camera_focal_length", 12.0)),
         livestream_camera=str(execution.get("livestream_camera", "overhead")),
         environment_planes=dict(execution.get("environment_planes", {})),
         robot_motion_mode=str(execution.get("robot_motion_mode", "kinematic")),
@@ -145,18 +119,10 @@ def main() -> int:
             if overhead is not None:
                 Image.fromarray(overhead).save(overhead_dir / f"frame_{frame_index:04d}.png")
             if args.motion == "translate_turn" and frame_index % 3 == 0:
-                feedback = executor.send_velocity_command(-0.12, 0.0, 0.00)
+                feedback = executor.send_velocity_command(0.12, 0.0, 0.35)
                 collision = collision or feedback.collision
                 if feedback.collision:
-                    print(f"Collision blocked at frame {frame_index}: {feedback.reason}")
-                    break
-            # Straight-forward translation only (no turn): lets the WebRTC viewer
-            # confirm the Go2 body is actually moving across the scene.
-            if args.motion == "translate" and frame_index % 3 == 0:
-                feedback = executor.send_velocity_command(0.12, 0.0, 0.0)
-                collision = collision or feedback.collision
-                if feedback.collision:
-                    print(f"Collision blocked at frame {frame_index}: {feedback.reason}")
+                    print(f"Collision blocked at frame {frame_index}: {feedback.message}")
                     break
             time.sleep(1.0 / camera_fps)
     finally:

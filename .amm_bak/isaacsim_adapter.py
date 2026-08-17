@@ -23,21 +23,15 @@ from agentic_memory_nav.execution.safety_controller import SafetyController, Saf
 
 _SIMULATION_APP: Any | None = None
 
-# Camera() defaults to looking down its local -Z axis. The Go2 asset's authored
-# front is +Y, while this project's navigation yaw uses world +X as zero yaw.
-# The initial pose therefore maps local -Z to world +Y.
-
-# 相机默认朝 -Z 看；Go2 资产的机头是 +Y，因此初始姿态要把 -Z 对齐到 +Y。
-_FORWARD_CAMERA_ORIENTATION_WXYZ = np.array(
-    [math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0], dtype=np.float32
-)
-_GO2_FORWARD_YAW_RAD = math.pi * 0.5
+# Camera() defaults to looking down its local -Z axis; on this z-up stage that means
+# straight at the floor unless rotated to face the robot's +X direction of travel.
+_FORWARD_CAMERA_ORIENTATION_WXYZ = np.array([0.5, 0.5, -0.5, -0.5], dtype=np.float32)
 
 # Body origin height and head-mounted camera offset for the Unitree Go2 asset, whose
 # authored default pose is standing. The camera sits clear of the head mesh, which
 # otherwise occludes the lower half of the frame.
 _GO2_BASE_HEIGHT_M = 0.40
-_GO2_CAMERA_OFFSET_M = (0.0, 0.42, 0.14)
+_GO2_CAMERA_OFFSET_M = (0.42, 0.0, 0.14)
 _GO2_STANDING_HALF_EXTENTS_M = (0.34, 0.20, 0.30)
 _CUBOID_BASE_HEIGHT_M = 0.15
 
@@ -106,23 +100,8 @@ def camera_look_at_quaternion(
     if (camera_forward_axis, camera_up_axis) != ("-Z", "+Y"):
         raise ValueError("Only camera_forward_axis='-Z' and camera_up_axis='+Y' are supported")
     forward = target - eye
-    forward_norm = np.linalg.norm(forward)
-    if forward_norm < 1e-8:
-        raise ValueError("Camera eye and target must not be identical")
-    forward /= forward_norm
-
+    forward /= np.linalg.norm(forward)
     image_up = up / np.linalg.norm(up)
-    if abs(float(np.dot(forward, image_up))) > 0.999999:
-        # Directly overhead/under the target is a degenerate look-at case: the
-        # view direction is parallel to the world up. Choose a non-parallel up
-        # axis so the camera basis remains well-defined while preserving the
-        # intended -Z forward semantics.
-        candidate_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-        if abs(forward[1]) > 0.9:
-            candidate_up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-        image_up = candidate_up - forward * np.dot(candidate_up, forward)
-        image_up /= np.linalg.norm(image_up)
-
     right = np.cross(forward, image_up)
     if np.linalg.norm(right) < 1e-6:
         raise ValueError("Camera eye-target direction must not be parallel to up")
@@ -156,7 +135,7 @@ def place_camera(
     camera: Any,
     eye: tuple[float, float, float] | np.ndarray,
     target: tuple[float, float, float] | np.ndarray,
-    up: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    up: tuple[float, float, float] = (0.0, 1.0, 0.0),
     orientation_offset_wxyz: np.ndarray | None = None,
 ) -> None:
     """Place an Isaac Sim camera with its local -Z lens pointing at target."""
@@ -279,9 +258,7 @@ class IsaacSimExecutor:
         head_scan_period_frames: int = 1,
         validate_initial_placement: bool = False,
         initial_robot_position: Vector3 | None = None,
-        initial_robot_yaw_deg: float = 0.0,
         camera_fps: int = 30,
-        camera_focal_length: float = 12.0,
         livestream_camera: str = "head",
         environment_planes: dict[str, Any] | None = None,
         robot_motion_mode: str = "kinematic",
@@ -309,15 +286,10 @@ class IsaacSimExecutor:
         self._frame_index = 0
         self._collision = False
         self._stopped = True
-        self._initial_robot_yaw_rad = math.radians(initial_robot_yaw_deg)
-        self._yaw = self._initial_robot_yaw_rad
+        self._yaw = 0.0
         self._camera_resolution = camera_resolution
         if not 30 <= camera_fps <= 60:
             raise ValueError(f"camera_fps must be between 30 and 60, got {camera_fps}")
-        if camera_focal_length <= 0.0:
-            raise ValueError(
-                f"camera_focal_length must be positive, got {camera_focal_length}"
-            )
         if livestream_camera not in {"head", "overhead"}:
             raise ValueError(
                 f"livestream_camera must be 'head' or 'overhead', got {livestream_camera!r}"
@@ -329,15 +301,11 @@ class IsaacSimExecutor:
         if light_rig != "gray_studio":
             raise ValueError(f"Only light_rig='gray_studio' is supported, got {light_rig!r}")
         self._camera_fps = camera_fps
-        self._camera_focal_length = float(camera_focal_length)
         self._robot_motion_mode = robot_motion_mode
         self._livestream_camera = livestream_camera
         self._head_scan_yaw_rad = math.radians(head_scan_yaw_deg)
         self._head_scan_pitch_rad = math.radians(head_scan_pitch_deg)
         self._head_scan_period_frames = max(1, head_scan_period_frames)
-        # Armed look-around window: 0 => the head lens holds still and points
-        # straight ahead with the body. A scan only runs while this is > 0.
-        self._head_scan_frames = 0
         self._validate_initial_placement = validate_initial_placement
         self._environment_planes = environment_planes or {}
         self._environment_plane_paths: set[str] = set()
@@ -432,64 +400,41 @@ class IsaacSimExecutor:
         # Parented to the robot Xform, so the lens follows the body's position and yaw.
         self._camera = Camera(
             prim_path=f"{self._robot_prim_path}/agent_camera",
-            position=camera_offset,  # ← 使用 camera_offset，而不是 np.zeros(3)
+            position=np.zeros(3, dtype=np.float32),
             orientation=_FORWARD_CAMERA_ORIENTATION_WXYZ,
             resolution=(width, height),
             frequency=self._camera_fps,
         )
-        self._overhead_camera = Camera(
-            prim_path="/World/overhead_camera",
-            position=np.zeros(3, dtype=np.float32),  # ← 临时位置，后面会被覆盖
-            orientation=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),  # ← 临时朝向
-            resolution=(width, height),
-            frequency=self._camera_fps,
-        )
-
-        if self._overhead_camera is not None:
-            self._overhead_camera.initialize()
-            self._overhead_camera.set_focal_length(self._camera_focal_length)
-            self._overhead_camera.add_distance_to_image_plane_to_frame()
-            
-            lower, upper = self._environment_bounds
-            scene_center = (lower + upper) * 0.5
-            
-            # 如果传入了位置，用传入的；否则自动计算
-            if overhead_camera_position is not None:
-                camera_eye = self._pose_to_usd(overhead_camera_position)
-            else:
-                height_span = max(float(upper[2] - lower[2]), 1.0)
-                camera_eye = np.array(
-                    [
-                        float(scene_center[0]),
-                        float(scene_center[1]),
-                        float(upper[2] + 3.0 * height_span),
-                    ],
-                    dtype=np.float32,
-                )
-            
-            place_camera(
-                self._overhead_camera,
-                camera_eye,
-                scene_center,
-                up=(0.0, 0.0, 1.0),
-                orientation_offset_wxyz=self._overhead_camera_orient_wxyz,
+        self._overhead_camera = None
+        if overhead_camera_position is not None:
+            self._overhead_camera = Camera(
+                prim_path="/World/overhead_camera",
+                position=np.zeros(3, dtype=np.float32),
+                orientation=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+                resolution=(width, height),
+                frequency=self._camera_fps,
             )
-
-        
         self._world.reset()
-        self._set_robot_pose(self._initial_robot_position_usd, yaw=self._initial_robot_yaw_rad)
+        self._set_robot_pose(self._initial_robot_position_usd, yaw=0.0)
         for _ in range(2):
             self._world.step(render=False)
         if self._validate_initial_placement:
             self._validate_robot_placement()
-
-    
         self._camera.initialize()
-        self._camera.set_focal_length(self._camera_focal_length)
         self._camera.add_distance_to_image_plane_to_frame()
         self._camera_offset = camera_offset
         self._update_head_camera_scan()
-
+        if self._overhead_camera is not None:
+            assert self._overhead_camera_position is not None
+            self._overhead_camera.initialize()
+            self._overhead_camera.add_distance_to_image_plane_to_frame()
+            lower, upper = self._environment_bounds
+            place_camera(
+                self._overhead_camera,
+                self._pose_to_usd(self._overhead_camera_position),
+                (lower + upper) * 0.5,
+                orientation_offset_wxyz=self._overhead_camera_orient_wxyz,
+            )
         if bind_viewport_to_camera:
             self._bind_viewport(self._livestream_camera_path())
         for _ in range(3):
@@ -707,31 +652,13 @@ class IsaacSimExecutor:
             position=position_usd, orientation=_yaw_to_quat_wxyz(self._yaw)
         )
 
-    def trigger_head_scan(self, frames: int) -> None:
-        """Arm a bounded head look-around; the lens is static until this is called.
-
-        The agent camera holds still and points straight ahead with the body by
-        default. A caller invokes this only when a look-around is genuinely needed
-        (e.g. a new object just entered the scene graph); until the armed window
-        expires the view never drifts.
-        """
-        self._head_scan_frames = max(0, int(frames))
-
     def _update_head_camera_scan(self) -> None:
-        if self._head_scan_frames > 0:
-            self._head_scan_frames -= 1
-            phase = 2.0 * math.pi * self._frame_index / self._head_scan_period_frames
-            scan_yaw = self._head_scan_yaw_rad * math.sin(phase)
-            scan_pitch = self._head_scan_pitch_rad * math.sin(phase * 0.5)
-        else:
-            scan_yaw = 0.0
-            scan_pitch = 0.0
-        
+        phase = 2.0 * math.pi * self._frame_index / self._head_scan_period_frames
+        scan_yaw = self._head_scan_yaw_rad * math.sin(phase)
+        scan_pitch = self._head_scan_pitch_rad * math.sin(phase * 0.5)
         position, _ = self._robot.get_world_pose()
         yaw = self._yaw
         offset = self._camera_offset
-        
-        # 计算相机在世界坐标系中的位置
         eye = position + np.array(
             [
                 math.cos(yaw) * offset[0] - math.sin(yaw) * offset[1],
@@ -740,31 +667,23 @@ class IsaacSimExecutor:
             ],
             dtype=np.float32,
         )
-        
-        # 计算朝向方向（在 USD 坐标系中）
-        look_yaw = yaw + _GO2_FORWARD_YAW_RAD + scan_yaw
+        look_yaw = yaw + scan_yaw
         direction = np.array(
             [
-                math.cos(look_yaw) * math.cos(scan_pitch),  # x
-                math.sin(look_yaw) * math.cos(scan_pitch),  # y
-                math.sin(scan_pitch),                        # z
+                math.cos(look_yaw) * math.cos(scan_pitch),
+                math.sin(look_yaw) * math.cos(scan_pitch),
+                math.sin(scan_pitch),
             ],
             dtype=np.float32,
         )
-        
         place_camera(
             self._camera,
             eye,
             eye + direction,
-            up=(0.0, 0.0, 1.0),  # ← 明确指定 up 为世界 +Z
+            up=(0.0, 0.0, 1.0),
             orientation_offset_wxyz=self._go2_camera_orient_wxyz,
         )
-        _, orientation = self._camera.get_world_pose()
-        # print(f"Camera orientation (wxyz): {orientation}")
-        # print(f"Camera direction: {direction}")
-        # print(f"Robot yaw: {math.degrees(yaw):.1f}°")
 
-        
     def get_overhead_rgb(self) -> np.ndarray | None:
         """Return the observer camera frame; this is never passed to the agent."""
         if self._overhead_camera is None:
@@ -800,7 +719,7 @@ class IsaacSimExecutor:
         self._collision = False
         self._stopped = True
         self._set_robot_pose(
-            self._initial_robot_position_usd, yaw=self._initial_robot_yaw_rad
+            self._initial_robot_position_usd, yaw=0.0
         )
         self._world.reset()
 
@@ -848,22 +767,13 @@ class IsaacSimExecutor:
             )
 
         position, _ = self._robot.get_world_pose()
-        
-        # 将局部速度旋转到世界坐标系
-        cos_yaw = math.cos(self._yaw)
-        sin_yaw = math.sin(self._yaw)
-        vx_world = vx * cos_yaw - vy * sin_yaw
-        vy_world = vx * sin_yaw + vy * cos_yaw
-        
-        destination = position + np.array([vx_world * self.dt, vy_world * self.dt, 0.0], dtype=np.float32)
+        destination = position + np.array([vx * self.dt, vy * self.dt, 0.0], dtype=np.float32)
         yaw = self._yaw + wz * self.dt
-        
         can_move, message = self._can_move_to(destination, yaw)
         if not can_move:
             self.stop()
             self._collision = True
             return ExecutionFeedback("velocity", False, self.get_state(), True, 0.0, message)
-        
         self._set_robot_pose(destination, yaw=yaw)
         self._stopped = False
         self._world.step(render=False)

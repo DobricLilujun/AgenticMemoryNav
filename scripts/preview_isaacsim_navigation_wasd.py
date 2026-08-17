@@ -1,30 +1,41 @@
 #!/usr/bin/env python3
-"""Render the configured Isaac Sim navigation scene without running an agent.
+"""Render the configured Isaac Sim navigation scene with WASD keyboard control.
+
 
 The preview creates the scene, dynamic-bound ground/ceiling planes, and kinematic
-Go2, then optionally applies a short translation/turn motion with PhysX pre-checks.
-`--motion translate` moves the Go2 straight forward (no turn) so the WebRTC viewer
-can confirm the body is actually moving; `--motion translate_turn` also turns;
-`--motion stationary` holds the robot still. The agent camera itself stays static
-and only looks around on demand, so a moving body shows as motion in the view.
+Go2, then allows interactive control via WASD keys:
+- W: Move forward
+- S: Move backward
+- A: Move left
+- D: Move right
+- Q: Turn left (counter-clockwise)
+- E: Turn right (clockwise)
+- Space: Stop / Brake
+- P: Pause / Exit
 Run with Isaac Sim's Python:
-    ~/isaacsim/python.sh scripts/preview_isaacsim_navigation.py \
-        --config configs/isaacsim_realtime_agent_internscenes.yaml --livestream \
-        --motion translate
+    ~/isaacsim/python.sh scripts/preview_isaacsim_keyboard.py \
+        --config configs/isaacsim_realtime_agent_internscenes.yaml --livestream
 """
 
+
 from __future__ import annotations
+
 
 import argparse
 import sys
 import time
+import threading
 from pathlib import Path
+from typing import Dict
+
 
 import numpy as np
 from PIL import Image
 
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+
 
 from agentic_memory_nav.common.config import load_config  # noqa: E402
 from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun  # noqa: E402
@@ -32,15 +43,119 @@ from agentic_memory_nav.execution.isaacsim_adapter import IsaacSimExecutor  # no
 from agentic_memory_nav.execution.safety_controller import SafetyController  # noqa: E402
 
 
-def _as_vector3(value: object, name: str) -> tuple[float, float, float] | None:
-    if value is None:
-        return None
-    if not isinstance(value, (list, tuple, np.ndarray)):
-        raise ValueError(f"{name} must be a sequence of 3 numbers, got {type(value).__name__}: {value!r}")
-    vector = tuple(float(item) for item in value)
-    if len(vector) != 3:
-        raise ValueError(f"{name} must contain exactly 3 values, got {vector!r}")
-    return vector
+# Global state for keyboard control
+_key_state: Dict[str, bool] = {
+    'w': False, 'a': False, 's': False, 'd': False,
+    'q': False, 'e': False, ' ': False, 'p': False
+}
+_key_lock = threading.Lock()
+_key_timestamps: Dict[str, float] = {}  # 记录每个键最后按下的时间
+_key_hold_duration = 0.15  # 按键保持时间（秒）
+_running = True
+
+
+def _get_keyboard_input() -> tuple[float, float, float]:
+    """Read current keyboard state and return velocity command (vx, vy, wz)."""
+    current_time = time.time()
+    
+    with _key_lock:
+        # 检查每个键是否超时，超时则释放
+        for key in _key_state:
+            if _key_state[key] and key in _key_timestamps:
+                if current_time - _key_timestamps[key] > _key_hold_duration:
+                    _key_state[key] = False
+        
+        keys = _key_state.copy()
+    
+    # Check for exit key
+    if keys['p']:
+        return None, None, None  # Signal to exit
+    
+    vx, vy, wz = 0.0, 0.0, 0.0
+    speed = 0.3  # m/s
+    turn_speed = 0.5  # rad/s
+    
+    # Forward/backward
+    if keys['w']:
+        vx += speed
+    if keys['s']:
+        vx -= speed
+    
+    # Left/right strafe
+    if keys['a']:
+        vy += speed
+    if keys['d']:
+        vy -= speed
+    
+    # Turn left/right
+    if keys['q']:
+        wz += turn_speed
+    if keys['e']:
+        wz -= turn_speed
+    
+    # Space to stop
+    if keys[' ']:
+        vx, vy, wz = 0.0, 0.0, 0.0
+    
+    return vx, vy, wz
+
+
+def _keyboard_listener() -> None:
+    """Background thread to listen for keyboard input."""
+    global _running
+    
+    try:
+        import sys
+        import termios
+        import tty
+        import select
+        
+        # Save terminal settings
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        
+        try:
+            # Set terminal to raw mode
+            tty.setraw(fd)
+            
+            while _running:
+                # Non-blocking check for input
+                ready, _, _ = select.select([sys.stdin], [], [], 0.02)
+                if not ready:
+                    continue
+                
+                char = sys.stdin.read(1)
+                if not char:
+                    continue
+                
+                key = char.lower()
+                current_time = time.time()
+                
+                # Update key state and timestamp
+                with _key_lock:
+                    if key in _key_state:
+                        _key_state[key] = True
+                        _key_timestamps[key] = current_time
+                
+                # Check for exit
+                if key == 'p':
+                    print("\n[P] pressed - exiting...")
+                    _running = False
+                    break
+                    
+            # Reset all keys when thread exits
+            with _key_lock:
+                for key in _key_state:
+                    _key_state[key] = False
+                _key_timestamps.clear()
+                    
+        finally:
+            # Restore terminal settings
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            
+    except Exception as e:
+        print(f"Keyboard listener error: {e}", file=sys.stderr)
+        _running = False
 
 
 def _parse_robot_start_pose(value: object, name: str) -> tuple[tuple[float, float, float] | None, float]:
@@ -62,26 +177,36 @@ def _parse_robot_start_pose(value: object, name: str) -> tuple[tuple[float, floa
     raise ValueError(f"{name} must be a 3D position, a 4D pose [x, y, z, yaw_deg], or a mapping")
 
 
+def _as_vector3(value: object, name: str) -> tuple[float, float, float] | None:
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple, np.ndarray)):
+        raise ValueError(f"{name} must be a sequence of 3 numbers, got {type(value).__name__}: {value!r}")
+    vector = tuple(float(item) for item in value)
+    if len(vector) != 3:
+        raise ValueError(f"{name} must contain exactly 3 values, got {vector!r}")
+    return vector
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=str(ROOT / "configs/isaacsim_realtime_agent_internscenes.yaml"))
-    parser.add_argument("--frames", type=int, default=180)
-    parser.add_argument("--motion", choices=("stationary", "translate", "translate_turn"), default="translate_turn")
     parser.add_argument("--livestream", action="store_true")
-    parser.add_argument("--public-ip", default="127.0.0.1")
+    parser.add_argument("--public-ip", default="127.0.0.0.1")
     return parser.parse_args()
 
 
 def main() -> int:
+    global _running
+    
     args = parse_args()
-    if args.frames <= 0:
-        raise ValueError("frames must be positive")
     config = load_config(args.config)
     execution = config.section("execution")
     robot_start, robot_yaw_deg = _parse_robot_start_pose(execution.get("robot_start"), "robot_start")
     camera_fps = int(execution.get("camera_fps", 30))
     if not 30 <= camera_fps <= 60:
         raise ValueError(f"execution.camera_fps must be between 30 and 60, got {camera_fps}")
+
 
     livestream_args = None
     if args.livestream:
@@ -92,6 +217,7 @@ def main() -> int:
             f"--/exts/omni.kit.livestream.app/primaryStream/targetFps={camera_fps}",
         ]
         print(f"Livestream: WebRTC signal at {args.public_ip}:49100 (stream port 47998)")
+
 
     run = ExperimentRun(ROOT / str(config.section("runtime").get("output_root", "outputs")), config.raw)
     head_dir = run.artifacts / "head_rgb"
@@ -135,43 +261,56 @@ def main() -> int:
         light_rig=str(execution.get("light_rig", "gray_studio")),
     )
 
+
     collision = False
+    frame_index = 0
+    print("\n=== WASD Control ===")
+    print("W: Forward  | S: Backward")
+    print("A: Left     | D: Right")
+    print("Q: Turn Left  | E: Turn Right")
+    print("Space: Stop")
+    print("P: Exit")
+    print("\nRunning... press P to exit\n")
+    
     try:
         executor.reset()
-        for frame_index in range(args.frames):
+        
+        # Start keyboard listener in background
+        listener_thread = threading.Thread(target=_keyboard_listener, daemon=True)
+        listener_thread.start()
+        
+        while _running:
             frame = executor.get_observation()
             Image.fromarray(frame.rgb).save(head_dir / f"frame_{frame_index:04d}.png")
             overhead = executor.get_overhead_rgb()
             if overhead is not None:
                 Image.fromarray(overhead).save(overhead_dir / f"frame_{frame_index:04d}.png")
-            if args.motion == "translate_turn" and frame_index % 3 == 0:
-                feedback = executor.send_velocity_command(-0.12, 0.0, 0.00)
+            
+            # Get keyboard input and send velocity command
+            vx, vy, wz = _get_keyboard_input()
+            
+            # Check for exit signal
+            if vx is None:
+                break
+            
+            if vx != 0.0 or vy != 0.0 or wz != 0.0:
+                feedback = executor.send_velocity_command(vx, vy, wz)
                 collision = collision or feedback.collision
                 if feedback.collision:
                     print(f"Collision blocked at frame {frame_index}: {feedback.reason}")
-                    break
-            # Straight-forward translation only (no turn): lets the WebRTC viewer
-            # confirm the Go2 body is actually moving across the scene.
-            if args.motion == "translate" and frame_index % 3 == 0:
-                feedback = executor.send_velocity_command(0.12, 0.0, 0.0)
-                collision = collision or feedback.collision
-                if feedback.collision:
-                    print(f"Collision blocked at frame {frame_index}: {feedback.reason}")
-                    break
+            
             time.sleep(1.0 / camera_fps)
+            frame_index += 1
+            
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
     finally:
         run.write_json(
             "preview_summary.json",
-            {"frames_requested": args.frames, "motion": args.motion, "collision_blocked": collision},
+            {"frames_rendered": frame_index, "collision_blocked": collision, "mode": "keyboard_control"},
         )
         print(f"Preview artifacts: {run.path}", flush=True)
         run.close()
-        if args.livestream and bool(execution.get("keep_streaming", False)):
-            print(
-                "Preview complete; WebRTC stream remains active. Press Ctrl+C to stop.",
-                flush=True,
-            )
-            executor.stream_until_interrupted()
         executor.close()
     return 0
 

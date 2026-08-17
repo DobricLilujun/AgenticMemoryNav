@@ -24,9 +24,7 @@ execution:
   # Freeze all leg joints; navigation controls only translate/rotate the complete Go2 body.
   robot_motion_mode: kinematic
   # (x, height_up, north). PhysX overlap scan with the active Go2 articulation verified it.
-  robot_start:
-    position: [2.59, 0.35, 1.0]
-    yaw_deg: 0.0
+  robot_start: [2.59, 0.35, 1.0]
   # Reject initialization before the agent loop if the Go2 standing volume hits a scene collider.
   validate_initial_placement: true
   # Plane dimensions and center are derived from the loaded scene USD world bounds.
@@ -46,18 +44,18 @@ execution:
       color: [0.82, 0.84, 0.88]
       collision_enabled: true
   # The overhead observer is recorded separately; its RGB is never sent to MemoryAgent.
-  # overhead_camera_position: [0.0, 0.0, 30.0]
+  overhead_camera_position: [0.0, 0.0, 30.0]
   # Relative X/Y/Z Euler-angle offset in degrees from the default look-at pose.
   overhead_camera_orient: [0.0, 0.0, 0.0]
   # Relative X/Y/Z Euler-angle offset in degrees. It stays bound to the Go2 body.
   go2_camera_orient: [0.0, 0.0, 0.0]
-  # WebRTC must show the same head lens used by the agent.
-  livestream_camera: head
+  # WebRTC starts in this observer view. Set to "head" to stream the Go2 lens instead.
+  livestream_camera: overhead
   # Keep the Isaac Sim WebRTC stream alive after a preview or agent run completes.
   keep_streaming: true
   # Small periodic look-around motion for the head lens, in addition to the body yaw.
-  head_scan_yaw_deg: 0.0
-  head_scan_pitch_deg: 0.0
+  head_scan_yaw_deg: 20.0
+  head_scan_pitch_deg: 10.0
   head_scan_period_frames: 24
   bind_viewport_to_camera: true
   max_speed: 0.35
@@ -66,8 +64,6 @@ execution:
   headless: true
   camera_width: 320
   camera_height: 240
-  # Smaller focal length gives the agent a wider field of view (millimeters).
-  camera_focal_length: 2.0
   # Applied to both the Go2 head camera and the overhead observer; valid range is 30-60.
   camera_fps: 30
   waypoint_duration_s: 5.0
