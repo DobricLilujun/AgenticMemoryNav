@@ -1,81 +1,82 @@
-# AgenticMemoryNav — Coordinate-System & Camera Reference
+# AgenticMemoryNav — Coordinate-System & Camera Reference (STANDARDIZED)
 
-> Task 2 deliverable: annotate the coordinate conventions and camera logic that are
-> the most error-prone parts of the Isaac Sim navigation stack. Read this before
-> touching anything in `isaacsim_adapter.py`.
+> Read this before touching `isaacsim_adapter.py`. This document describes the
+> **standardized** coordinate convention. The old `(x, height, north)` / north↔height
+> swap and the `+90°` forward hack have been **removed**.
 
-## 1. The four coordinate frames in play
+## 1. The coordinate frames (standardized)
 
-There are **four** frames. Confusing them is the #1 source of the camera bugs.
+| Frame | Axes | Used by |
+|-------|------|---------|
+| **odom (world)** | **X, Y, Z-up** | Isaac Sim USD world, `_robot`, cameras, PhysX. **`Pose3D` = odom exactly (no remap).** |
+| **base_link** | **X forward, Y left, Z up** (ROS REP 105) | The robot body frame. Heading `yaw` about odom Z; `yaw=0` ⇒ base +X ∥ odom +X. |
+| **camera_link** | offset in base_link frame `(forward, left, up)` | The head camera mount on the robot; moves with base_link. |
+| **camera optical** | **−Z forward, +Y up, +X right** (Isaac default) | Isaac `Camera` primitive intrinsic frame. |
 
-| # | Frame | Axes | Who uses it |
-|---|-------|------|-------------|
-| A | **World (USD / Isaac Sim)** | X, Y, **Z-up** | The stage, `_robot`, the cameras, PhysX. Everything Isaac renders. |
-| B | **`Pose3D` (project convention)** | `(x, height, north)` → i.e. `(x, z_up, y)` | The Python agent/pipeline. Height is **index 1** (Habitat convention). |
-| C | **Body-local offset** | `(forward, right, up)` | The fixed camera offset relative to the robot base. |
-| D | **Camera-local** | `-Z` forward, `+Y` up | Isaac's `Camera` primitive intrinsic convention. |
+### Key change vs. the old code
+- **No north↔height swap.** `_pose_to_usd` / `_usd_to_pose` are now **identity**:
+  `Pose3D(x, y, z)` ↔ USD `(x, y, z)`, Z-up. (Previously height lived at index 1.)
+- **No `+90°` forward hack.** The camera forward is simply the yaw-rotated base
+  `+X`; `_GO2_FORWARD_YAW_RAD` is removed.
+- **`base_link` is X-forward / Y-left / Z-up** (ROS REP 105), not the old
+  "Go2 front = +Y" convention.
 
-### The boundary remaps (in `IsaacSimExecutor`)
+### Scene up-axis wrap (Y-up InternScenes → Z-up stage)
+InternScenes scenes are **Y-up**; Isaac renders **Z-up**. `_open_scene_stage`
+wraps the scene in a temp USD layer that rotates the scene onto Z-up:
 ```
-_pose_to_usd:  (x, z_up, y_north)  ->  np.array([x, y_north, z_up])      # B -> A
-_usd_to_pose:  (x, y_north, z_up)  ->  Pose3D(x, z_up, y_north)          # A -> B
+/World (upAxis = Z, identity transform)
+  /World/scene (prepend references = @scene@, xformOp:orient = (0.707,0.707,0,0))
 ```
-Why height is index 1: the project `Pose3D.position` stores height at index 1
-to match the Habitat adapter's convention; USD is Z-up, so the two frames are
-remapped at the boundary rather than carried raw.
-
-### The scene up-axis wrap (Y-up InternScenes -> Z-up stage)
-InternScenes scenes are **Y-up**. Isaac renders **Z-up**. `_open_scene_stage`
-wraps the scene in a temp USD layer:
-```
-/World (upAxis = Z)
-  /World/scene  (prepend references = @scene@)   # original Y-up scene
-    xformOp:orient = (0.70710678, 0.70710678, 0, 0)   # +90 deg about +X
-```
-So the imported scene's +Y is rotated onto the stage's +Z (up). The scene's
-+Z goes to -Y. **The robot and cameras live in frame A (Z-up); only the scene
-mesh is rotated.**
+Only the scene mesh is rotated; the robot and cameras live in **odom (frame A, Z-up)**.
 
 ## 2. Robot / yaw
-- `self._yaw` is a **body yaw about world +Z** (frame A). Zero yaw faces +X.
-- The Go2 asset's **authored front is +Y**. That mismatch is `_GO2_FORWARD_YAW_RAD = +90 deg`,
-  added in `_position_head_camera` so the camera looks along the body's actual
-  forward, not world +X.
+- `self._yaw` is a **body yaw about odom Z**. `yaw=0` ⇒ base_link +X ∥ odom +X.
+- base_link axes in odom: `+X → (cos, sin, 0)`, `+Y(left) → (−sin, cos, 0)`, `+Z(up) → (0,0,1)`.
+- `_yaw_to_quat_wxyz(yaw)` sets the robot prim orientation (about odom Z).
 
-## 3. Head camera (the agent lens) — `_position_head_camera`
-Standard look-at, recomputed every frame from the robot pose:
+## 3. Head camera (agent lens) — `_position_head_camera`
+Standard world-space **look-at**, recomputed every frame from the robot pose:
 ```
-eye       = robot_pos_world + R(yaw) * _GO2_CAMERA_OFFSET_M      # frame C -> A
-forward   = +90deg(yaw)   (body forward)  + optional scan       # +90deg = _GO2_FORWARD_YAW_RAD
-direction = [cos(forward)*cos(pitch), sin(forward)*cos(pitch), sin(pitch)]
-place_camera(cam, eye, eye+direction, up=(0,0,1), offset=go2_camera_orient)
+eye       = robot_pos_odom + R(yaw) · _GO2_CAMERA_OFFSET_M     # camera_link offset → odom
+forward   = R(yaw) · base_link(+X)   + optional scan          # NO +90°; base +X is the forward
+direction = [cos(forward)·cos(pitch), sin(forward)·cos(pitch), sin(pitch)]
+place_camera(cam, eye, eye + direction, up=(0,0,1))           # −Z points along forward
 ```
-- `_GO2_CAMERA_OFFSET_M = (0.0, 0.42, 0.14)` = (forward, right, up) in metres.
-- `place_camera` builds a look-at quaternion with camera `-Z` forward, `+Y` up
-  (frame D), world up `+Z`, then applies an optional Euler offset.
-- **Static by default.** Only an armed scan (`trigger_head_scan`) adds a
-  yaw/pitch; otherwise the lens holds and points straight ahead.
+- `_GO2_CAMERA_OFFSET_M = (0.42, 0.0, 0.14)` = **(forward, left, up)** in base_link metres
+  (previously `(0.0, 0.42, 0.14)` = forward-right-up under the old convention).
+- `place_camera` builds a look-at quaternion with camera **−Z forward, +Y up** (optical),
+  world up **+Z**, and applies an optional external offset only if one is passed.
+- **Static by default.** Only an armed scan (`trigger_head_scan`) adds a yaw/pitch;
+  otherwise the lens holds and points straight ahead.
 
 ## 4. Overhead camera (observer) — `_place_overhead_camera`
-- Static, placed **once at startup**. Not parented to anything.
-- Eye = explicit `overhead_camera_position` (config) **or** scene-centre in X/Y
-  raised `3 * height_span` above the ceiling. Looks down at scene centre.
+- Static, placed **once at startup**; not parented to anything.
+- Eye = explicit `overhead_camera_position` (config) **or** scene-centre in X/Y raised
+  `3 · height_span` above the ceiling. Looks **down** at scene centre (up = +Z).
 - **Only created when used** (explicit position, or `livestream_camera: overhead`).
   Its RGB is never fed to the agent.
 
-## 5. Known blank-frame cause (NOT a code bug)
-With the internscenes config, `robot_start: [2.59, 0.35, 1.0]` places the Go2 at
-USD `(2.59, 1.0, 0.35)`; the head camera eye is `(2.59, 1.42, 0.49)` looking +Y.
-At that vantage the head lens faces a blank wall/ceiling → uniform gray frames.
-Verified: the refactored camera code produces **byte-identical** output to the
-pre-refactor code at the same config (mean pixel diff 0.56/255 = render noise),
-so the gray is a **vantage/config issue, not a refactor regression**. The
-"working" frames the user saw used the on-demand look-around scan (or a different
-robot_start / `go2_camera_orient`) that swept the lens across the room.
+## 5. Optical → base_link alignment (documented, not applied by default)
+The head camera is **world-placed**, so a look-at whose `−Z` points along base
+`+X` already makes the camera look forward. No extra alignment is applied.
+The constant `_OPTICAL_TO_BASE_OFFSET_WXYZ = [0.5, 0.5, −0.5, −0.5]` records the
+fixed rotation that would map Isaac optical axes onto base_link axes
+(optical +X→base −Y, +Y→+Z, +Z→−X); it is only used if a caller explicitly passes
+an `orientation_offset` (e.g. for a **parented** camera chain).
 
 ## 6. Camera intrinsics
-`get_observation` currently hardcodes `CameraIntrinsics(80, 80, cx, cy, w, h)`
-and does not use `camera_focal_length` from the config. Focal length affects the
-rendered FoV (Isaac `set_focal_length`), but the `CameraIntrinsics` reported to
-the mapping agent stays a fixed approximation — revisit if geometry fidelity is
-needed.
+`get_observation` currently reports `CameraIntrinsics(80, 80, cx, cy, w, h)` and
+does not yet derive the reported intrinsics from `camera_focal_length`. The config
+`camera_focal_length` still drives the **rendered** FoV via Isaac `set_focal_length`;
+the intrinsics reported to the mapping agent stay a fixed approximation. Revisit
+if geometry fidelity is needed.
+
+## 7. Verification (how the standard was checked)
+- **Unit test:** for yaw ∈ {0, 90, 180, 30}° the head-camera forward equals the
+  yaw-rotated base `+X` and the camera up equals odom `+Z`. Passes.
+- **Pose round-trip:** `_usd_to_pose(_pose_to_usd(p)) == p` (identity, no swap). Passes.
+- **Preview frame** (`preview_isaacsim_navigation.py --frames 4 --motion stationary`,
+  internscenes config): head frames are ~29 KB with std ≈ 56 (real content) and the
+  **bright region sits at the top / floor at the bottom** — the signature of a
+  correctly-oriented forward view (the old blank frames were uniform gray, std ≈ 1.4).

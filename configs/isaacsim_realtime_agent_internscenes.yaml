@@ -4,10 +4,10 @@
 #
 # 结构: runtime(运行) / mapping(建图) / perception(感知) / execution(执行)。
 #
-# 坐标约定(重要):
-#   本项目 Pose3D = (x, height_up, north); USD = (x, north, z_up)。
-#   边界处由 _pose_to_usd / _usd_to_pose 重映射, 故凡写 (x, height, north)
-#   之处, 实际进入 USD 时 north 与 height 会互换。
+# 坐标约定(已标准化):
+#   odom = USD 世界系, Z 轴朝上; Pose3D/robot_start 直接存 odom (x, y, z), 无重映射。
+#   base_link: X 前 / Y 左 / Z 上 (ROS REP 105); yaw 绕 odom Z, yaw=0 时 base +X 对齐 odom +X。
+#   camera_link: 固定在机器狗上的相机安装系; 相机光学系 -Z 看 / +Y 上 (Isaac 标准)。
 # =============================================================================
 
 runtime:
@@ -53,12 +53,16 @@ execution:
   # ---------------------------------------------------------------------------
   # 初始位姿与放置校验
   # ---------------------------------------------------------------------------
-  # robot_start 坐标顺序 (x, height_up, north); yaw_deg 为初始偏航(度)。
+  # 坐标系(已标准化):
+  #   odom = USD 世界系, Z 轴朝上; Pose3D/robot_start 直接存 odom (x, y, z), 无重映射。
+  #   base_link: X 前 / Y 左 / Z 上; yaw 绕 odom Z, yaw=0 时 base +X 对齐 odom +X。
+  # robot_start.position 为 odom 系 (x, y, z)。此处 [2.59, 1.0, 0.35] 对应旧配置
+  #   [2.59, 0.35, 1.0](x,height,north) 映射到同一物理点, 以保持机器狗落点不变。
   # 该初始位置已用 PhysX overlap 扫描与激活的 Go2 articulation 验证是否撞墙。
   # validate_initial_placement=true: 若智能体循环开始前 Go2 站立体积与场景碰撞体
   #   相交, 则直接拒绝初始化(抛错), 避免机器人一开始就嵌进墙/地板。
   robot_start:
-    position: [2.59, 0.35, 1.0]
+    position: [2.59, 1.0, 0.35]
     yaw_deg: 180.0
   validate_initial_placement: true
 
@@ -99,7 +103,7 @@ execution:
   # bind_viewport_to_camera=true: WebRTC 视口指向头相机(而非默认 persp 相机)。
   # overhead_camera_position: [0.0, 0.0, 30.0]
   overhead_camera_orient: [0.0, 0.0, 0.0]
-  go2_camera_orient: [90.0, 0.0, 0.0]
+  go2_camera_orient: [0.0, 0.0, 0.0]
   livestream_camera: head
   keep_streaming: true
   head_scan_yaw_deg: 0.0
