@@ -1,5 +1,9 @@
 """Optional Habitat-Sim executor boundary."""
 
+# 【模块】可选的 Habitat-Sim 执行器边界。
+# 【作用】提供 RobotBackend 兼容的 Habitat-Sim 包装，用于 MVP 阶段接入真实室内仿真；
+#         依赖惰性导入，纯 mock 流程不会要求安装 Habitat。
+
 from __future__ import annotations
 
 import importlib.util
@@ -21,6 +25,9 @@ from agentic_memory_nav.common.types import (
 from agentic_memory_nav.execution.safety_controller import SafetyController, SafetyError
 
 
+# 【类】Habitat 可用性边界（镜像 IsaacSimAdapter）。
+# 【原因】available 检测 habitat_sim 是否可导入；未安装则 start() 抛错，
+#        提示改用 execution.backend=unitree_sim。
 class HabitatAdapter:
     def __init__(self, scene: str) -> None:
         self.scene = scene
@@ -34,6 +41,10 @@ class HabitatAdapter:
         )
 
 
+# 【类】Habitat-Sim 执行器（RobotBackend 实现）。
+# 【原因】薄封装 Habitat，提供 RGB+深度相机、运动学积分与航点导航；
+#        坐标约定：Pose3D 第 2 个分量是高度(对应 Habitat 的 z)。
+# 【状态】_sim/_agent 仿真与智能体；_yaw 偏航；_collision/_stopped 状态标志。
 class HabitatSimExecutor:
     """Thin RobotBackend-compatible wrapper over habitat_sim for MVP integration."""
 
@@ -66,6 +77,8 @@ class HabitatSimExecutor:
         self._agent = self._sim.initialize_agent(0)
         self._set_agent_position((0.0, 0.0, 0.0))
 
+    # 【方法】构建 Habitat 仿真器：RGB+深度两个 64×96 相机(位于 z=1.5m)。
+    # 【原因】MVP 用低分辨率相机以节省算力，位置 1.5m 模拟头相机高度。
     def _build_simulator(self, habitat_sim: Any) -> Any:
         sim_cfg = habitat_sim.SimulatorConfiguration()
         sim_cfg.scene_id = self.scene
@@ -88,16 +101,19 @@ class HabitatSimExecutor:
         cfg = habitat_sim.Configuration(sim_cfg, [agent_cfg])
         return habitat_sim.Simulator(cfg)
 
+    # 【方法】把智能体位置设到给定坐标（写回 Habitat 状态）。
     def _set_agent_position(self, position: Vector3) -> None:
         state = self._agent.get_state()
         state.position = np.asarray(position, dtype=np.float32)
         self._agent.set_state(state)
 
+    # 【方法】从智能体状态读出位姿，重映射为 Pose3D(x, height, north)。
     def _state_from_agent(self) -> Pose3D:
         state = self._agent.get_state()
         x, y, z = [float(value) for value in state.position]
         return Pose3D(position=(x, y, z), yaw=self._yaw)
 
+    # 【方法】重置：位置归零、清碰撞/停状态、偏航归零、帧计数归零。
     def reset(self) -> None:
         self._frame_index = 0
         self._collision = False
@@ -105,9 +121,12 @@ class HabitatSimExecutor:
         self._yaw = 0.0
         self._set_agent_position((0.0, 0.0, 0.0))
 
+    # 【方法】返回当前位姿。
     def get_state(self) -> Pose3D:
         return self._state_from_agent()
 
+    # 【方法】取一帧观察：RGB 取 color_sensor 的 RGB 通道，深度取 depth_sensor；
+    #        内参固定 f=80、主点在画面中心。
     def get_observation(self) -> FrameObservation:
         observations = self._sim.get_sensor_observations()
         rgb = np.asarray(observations["color_sensor"])[:, :, :3].astype(np.uint8)
@@ -127,6 +146,7 @@ class HabitatSimExecutor:
         self._frame_index += 1
         return frame
 
+    # 【方法】速度指令（运动学积分）：速度/角速度超限时急停；否则按 dt 积分位置与偏航。
     def send_velocity_command(self, vx: float, vy: float, wz: float) -> ExecutionFeedback:
         started = time.perf_counter()
         speed = math.hypot(vx, vy)
@@ -153,6 +173,7 @@ class HabitatSimExecutor:
             "executed",
         )
 
+    # 【方法】航点指令：安全校验 → 计算 X/Z 平面距离 → 限速 travel → 沿方向移动 → 偏航指向目标 → 到达判定。
     def send_waypoint(self, waypoint: Vector3, intent: ActionIntent) -> ExecutionFeedback:
         started = time.perf_counter()
         try:
@@ -202,15 +223,19 @@ class HabitatSimExecutor:
             "waypoint reached" if reached else "action timeout before waypoint",
         )
 
+    # 【方法】置 _stopped=True。
     def stop(self) -> None:
         self._stopped = True
 
+    # 【方法】安全器急停 + 自身 stop。
     def emergency_stop(self) -> None:
         self.safety.emergency_stop()
         self.stop()
 
+    # 【方法】返回当前碰撞标志。
     def is_collision(self) -> bool:
         return self._collision
 
+    # 【方法】关闭 Habitat 仿真器，释放资源。
     def close(self) -> None:
         self._sim.close()
