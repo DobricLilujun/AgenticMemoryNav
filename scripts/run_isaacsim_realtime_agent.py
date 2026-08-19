@@ -190,9 +190,6 @@ def main() -> int:
     logger = configure_logging(run.path / "logs.jsonl", verbose=False)
     rgb_dir = run.artifacts / "rgb"
     rgb_dir.mkdir(exist_ok=True)
-    overhead_rgb_dir = run.artifacts / "overhead_rgb"
-    if execution.get("overhead_camera_position"):
-        overhead_rgb_dir.mkdir(exist_ok=True)
 
     live_view = None
     if not args.no_view:
@@ -249,12 +246,6 @@ def main() -> int:
         robot_usd=execution.get("robot_usd"),
         bind_viewport_to_camera=bool(execution.get("bind_viewport_to_camera", False)),
         scene_up_axis=str(execution.get("scene_up_axis", "z")),
-        overhead_camera_position=_as_vector3(
-            execution.get("overhead_camera_position"), "overhead_camera_position"
-        ),
-        overhead_camera_orient=_as_vector3(
-            execution.get("overhead_camera_orient"), "overhead_camera_orient"
-        ),
         go2_camera_orient=_as_vector3(execution.get("go2_camera_orient"), "go2_camera_orient"),
         head_scan_yaw_deg=float(execution.get("head_scan_yaw_deg", 0.0)),
         head_scan_pitch_deg=float(execution.get("head_scan_pitch_deg", 0.0)),
@@ -264,7 +255,6 @@ def main() -> int:
         initial_robot_yaw_deg=robot_yaw_deg,
         camera_fps=camera_fps,
         camera_focal_length=float(execution.get("camera_focal_length", 12.0)),
-        livestream_camera=str(execution.get("livestream_camera", "head")),
         environment_planes=dict(execution.get("environment_planes", {})),
         robot_motion_mode=str(execution.get("robot_motion_mode", "kinematic")),
         light_rig=str(execution.get("light_rig", "gray_studio")),
@@ -296,9 +286,6 @@ def main() -> int:
             Image.fromarray(frame.rgb).save(rgb_dir / f"frame_{step:04d}.png")
             if live_view is not None:
                 live_view.update(frame.rgb)
-            overhead_rgb = executor.get_overhead_rgb()
-            if overhead_rgb is not None:
-                Image.fromarray(overhead_rgb).save(overhead_rgb_dir / f"frame_{step:04d}.png")
             snapshot = memory_agent.ingest_frame(frame)
             robot_pose = executor.get_state()
             # Arm a look-around only when this frame added new scene-graph nodes,

@@ -35,29 +35,17 @@ Only the scene mesh is rotated; the robot and cameras live in **odom (frame A, Z
 - base_link axes in odom: `+X → (cos, sin, 0)`, `+Y(left) → (−sin, cos, 0)`, `+Z(up) → (0,0,1)`.
 - `_yaw_to_quat_wxyz(yaw)` sets the robot prim orientation (about odom Z).
 
-## 3. Head camera (agent lens) — `_position_head_camera`
-Standard world-space **look-at**, recomputed every frame from the robot pose:
-```
-eye       = robot_pos_odom + R(yaw) · _GO2_CAMERA_OFFSET_M     # camera_link offset → odom
-forward   = R(yaw) · base_link(+X)   + optional scan          # NO +90°; base +X is the forward
-direction = [cos(forward)·cos(pitch), sin(forward)·cos(pitch), sin(pitch)]
-place_camera(cam, eye, eye + direction, up=(0,0,1))           # −Z points along forward
-```
-- `_GO2_CAMERA_OFFSET_M = (0.42, 0.0, 0.14)` = **(forward, left, up)** in base_link metres
-  (previously `(0.0, 0.42, 0.14)` = forward-right-up under the old convention).
-- `place_camera` builds a look-at quaternion with camera **−Z forward, +Y up** (optical),
-  world up **+Z**, and applies an optional external offset only if one is passed.
+## 3. Head camera (agent lens) — parented to the robot
+The lens is a child prim of the robot Xform; its local pose (translation +
+base orientation) is set once at construction time and the world pose is
+carried automatically by the USD parent/child hierarchy. Only an armed scan
+(`trigger_head_scan`) perturbs the local orientation with a small yaw/pitch;
+otherwise the lens holds still and points straight ahead with the body.
+- `_GO2_CAMERA_OFFSET_M = (-0.20, 0.0, 0.14)` = **(forward, left, up)** in base_link metres.
 - **Static by default.** Only an armed scan (`trigger_head_scan`) adds a yaw/pitch;
   otherwise the lens holds and points straight ahead.
 
-## 4. Overhead camera (observer) — `_place_overhead_camera`
-- Static, placed **once at startup**; not parented to anything.
-- Eye = explicit `overhead_camera_position` (config) **or** scene-centre in X/Y raised
-  `3 · height_span` above the ceiling. Looks **down** at scene centre (up = +Z).
-- **Only created when used** (explicit position, or `livestream_camera: overhead`).
-  Its RGB is never fed to the agent.
-
-## 5. Optical → base_link alignment (documented, not applied by default)
+## 4. Optical → base_link alignment (documented, not applied by default)
 The head camera is **world-placed**, so a look-at whose `−Z` points along base
 `+X` already makes the camera look forward. No extra alignment is applied.
 The constant `_OPTICAL_TO_BASE_OFFSET_WXYZ = [0.5, 0.5, −0.5, −0.5]` records the
@@ -65,14 +53,14 @@ fixed rotation that would map Isaac optical axes onto base_link axes
 (optical +X→base −Y, +Y→+Z, +Z→−X); it is only used if a caller explicitly passes
 an `orientation_offset` (e.g. for a **parented** camera chain).
 
-## 6. Camera intrinsics
+## 5. Camera intrinsics
 `get_observation` currently reports `CameraIntrinsics(80, 80, cx, cy, w, h)` and
 does not yet derive the reported intrinsics from `camera_focal_length`. The config
 `camera_focal_length` still drives the **rendered** FoV via Isaac `set_focal_length`;
 the intrinsics reported to the mapping agent stay a fixed approximation. Revisit
 if geometry fidelity is needed.
 
-## 7. Verification (how the standard was checked)
+## 6. Verification (how the standard was checked)
 - **Unit test:** for yaw ∈ {0, 90, 180, 30}° the head-camera forward equals the
   yaw-rotated base `+X` and the camera up equals odom `+Z`. Passes.
 - **Pose round-trip:** `_usd_to_pose(_pose_to_usd(p)) == p` (identity, no swap). Passes.

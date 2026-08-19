@@ -59,7 +59,7 @@ _SIMULATION_APP: Any | None = None
 # 只在构造时通过 set_local_pose 设一次，之后靠父节点(机器人)的世界位姿带动，
 # 不再每帧重新 look-at。
 
-# 未使用的旧占位朝向常量，保留仅为历史参考；head/overhead 相机构造时都不再引用它。
+# 未使用的旧占位朝向常量，保留仅为历史参考（isaacsim_objectnav_adapter 仍引用它）。
 _FORWARD_CAMERA_ORIENTATION_WXYZ = np.array(
     [math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0], dtype=np.float32
 )
@@ -152,91 +152,6 @@ def _axis_angle_quat_wxyz(axis: tuple[float, float, float], angle: float) -> np.
     )
 
 
-# 【函数】标准 look-at：由 eye/target/up 生成相机世界空间 WXYZ 四元数。
-# 【约定】Isaac Sim 相机本体系：-Z 看、+Y 上、+X 右（标准 Isaac 光学系）。
-# 【算法】① forward 归一化；② up 归一化；③ 退化情形(正上/正下)换非平行 up；
-#        ④ 构造正交基 (right, up, -forward) → 旋转矩阵 → 四元数(含 trace>0 与
-#        一般两条路径)。
-# 【原因】这是整个相机朝向的核心：保证镜头本体系 -Z 指向 target。
-def camera_look_at_quaternion(
-    eye: np.ndarray,
-    target: np.ndarray,
-    up: np.ndarray,
-) -> np.ndarray:
-    forward = target - eye
-    forward_norm = np.linalg.norm(forward)
-    if forward_norm < 1e-8:
-        raise ValueError("Camera eye and target must not be identical")
-    forward /= forward_norm
-
-    image_up = up / np.linalg.norm(up)
-    if abs(float(np.dot(forward, image_up))) > 0.999999:
-        # Directly overhead/under the target is a degenerate look-at case: the
-        # view direction is parallel to the world up. Choose a non-parallel up
-        # axis so the camera basis remains well-defined while preserving the
-        # intended -Z forward semantics.
-        candidate_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-        if abs(forward[1]) > 0.9:
-            candidate_up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-        image_up = candidate_up - forward * np.dot(candidate_up, forward)
-        image_up /= np.linalg.norm(image_up)
-
-    right = np.cross(forward, image_up)
-    if np.linalg.norm(right) < 1e-6:
-        raise ValueError("Camera eye-target direction must not be parallel to up")
-    right /= np.linalg.norm(right)
-    image_up = np.cross(right, forward)
-    rotation = np.column_stack((right, image_up, -forward))
-    trace = float(np.trace(rotation))
-    if trace > 0.0:
-        scale = math.sqrt(trace + 1.0) * 2.0
-        quat = np.array(
-            [scale * 0.25, (rotation[2, 1] - rotation[1, 2]) / scale,
-             (rotation[0, 2] - rotation[2, 0]) / scale, (rotation[1, 0] - rotation[0, 1]) / scale],
-            dtype=np.float32,
-        )
-    else:
-        index = int(np.argmax(np.diag(rotation)))
-        next_index, final_index = (index + 1) % 3, (index + 2) % 3
-        scale = math.sqrt(1.0 + rotation[index, index] - rotation[next_index, next_index] - rotation[final_index, final_index]) * 2.0
-        xyz = np.zeros(3, dtype=np.float32)
-        xyz[index] = scale * 0.25
-        xyz[next_index] = (rotation[next_index, index] + rotation[index, next_index]) / scale
-        xyz[final_index] = (rotation[final_index, index] + rotation[index, final_index]) / scale
-        quat = np.array(
-            [(rotation[final_index, next_index] - rotation[next_index, final_index]) / scale, *xyz],
-            dtype=np.float32,
-        )
-    return quat / np.linalg.norm(quat)
-
-
-# 【函数】放置 Isaac Sim 相机：让镜头本体系 -Z 指向 target（世界系 look-at）。
-# 【流程】① 由 eye/target/up 求 look-at 四元数（-Z 指向 target、+Y 平行 up）；
-#        ② 若外部传入 orientation_offset 则叠加，否则直接采用 look-at 结果；
-#        ③ set_world_pose(位置 eye + 朝向)。
-# 【原因】仅供世界系静态放置的相机使用(如 overhead 观察者)；head(agent) 镜头已
-#        parented 到机器人，走 set_local_pose，不再调用本函数。
-def place_camera(
-    camera: Any,
-    eye: tuple[float, float, float] | np.ndarray,
-    target: tuple[float, float, float] | np.ndarray,
-    up: tuple[float, float, float] = (0.0, 0.0, 1.0),
-    orientation_offset_wxyz: np.ndarray | None = None,
-) -> None:
-    eye_array = np.asarray(eye, dtype=np.float32)
-    # 1) look-at：得到“本体系 -Z 指向 target、+Y 平行 up”的世界空间朝向。
-    orientation = camera_look_at_quaternion(
-        eye=eye_array,
-        target=np.asarray(target, dtype=np.float32),
-        up=np.asarray(up, dtype=np.float32),
-    )
-    # 2) 仅在显式请求时叠加外部偏移(默认不叠加，保持 look-at 即朝前)。
-    if orientation_offset_wxyz is not None:
-        orientation = _quat_multiply_wxyz(orientation, orientation_offset_wxyz)
-    # 3) 写回世界位姿。
-    camera.set_world_pose(position=eye_array, orientation=orientation)
-
-
 # 【函数】把被引用的机器人(如 Go2)冻结为刚体、保持直立。
 # 【原因】Go2 是物理 articulation，无步态控制器会在重力下塌陷；
 #        故删除 ArticulationRootAPI、关闭关节、把刚体设为 kinematic，由父 Xform 驱动。
@@ -327,11 +242,10 @@ class IsaacSimAdapter:
 
 
 # 【类】Isaac Sim 执行器(核心 RobotBackend 实现)。
-# 【作用】构建/加载场景、放置机器人与(头/俯视)相机、运动学驱动、碰撞预检、渲染。
+# 【作用】构建/加载场景、放置机器人与 head 相机、运动学驱动、碰撞预检、渲染。
 # 【坐标】USD 为 Z 轴朝上；Pose3D 高度在第 2 个分量，边界处重映射。
-# 【相机】两路独立：head(=agent 相机，parented 到机器人、局部位姿只设一次、随机器人
-#        世界位姿自动跟随) 与 overhead(场地中心静态观察者，仅被使用时才创建，其 RGB
-#        绝不喂给 agent)。
+# 【相机】仅 head(=agent 相机)，parented 到机器人、局部位姿只设一次、随机器人
+#        世界位姿自动跟随。
 class IsaacSimExecutor:
     """Thin RobotBackend-compatible wrapper over Isaac Sim for MVP integration.
 
@@ -349,10 +263,9 @@ class IsaacSimExecutor:
     #        ⑤ 构建 World：有场景→环境包围盒+平面+灰棚灯光(+可选碰撞校验)；
     #           无场景→平地+穹顶灯光+程序化障碍物；
     #        ⑥ 放置机器人(Go2 冻结为刚体 或 DynamicCuboid 占位)；
-    #        ⑦ 创建 head 相机(parented 到机器人，局部位姿只设一次)；overhead 仅在需要时创建；
+    #        ⑦ 创建 head 相机(parented 到机器人，局部位姿只设一次)；
     #        ⑧ 复位、设初始位姿、渲染若干帧预热。
-    # 【关键状态】_head_scan_frames 默认 0(镜头静止)，仅 arm 后扫视；
-    #        _overhead_camera 仅在需要时非 None。
+    # 【关键状态】_head_scan_frames 默认 0(镜头静止)，仅 arm 后扫视。
     def __init__(
         self,
         scene: str | None,
@@ -366,8 +279,6 @@ class IsaacSimExecutor:
         robot_usd: str | None = None,
         bind_viewport_to_camera: bool = False,
         scene_up_axis: str = "z",
-        overhead_camera_position: Vector3 | None = None,
-        overhead_camera_orient: Vector3 | None = None,
         go2_camera_orient: Vector3 | None = None,
         head_scan_yaw_deg: float = 0.0,
         head_scan_pitch_deg: float = 0.0,
@@ -377,7 +288,6 @@ class IsaacSimExecutor:
         initial_robot_yaw_deg: float = 0.0,
         camera_fps: int = 30,
         camera_focal_length: float = 12.0,
-        livestream_camera: str = "head",
         environment_planes: dict[str, Any] | None = None,
         robot_motion_mode: str = "kinematic",
         light_rig: str = "gray_studio",
@@ -413,10 +323,6 @@ class IsaacSimExecutor:
             raise ValueError(
                 f"camera_focal_length must be positive, got {camera_focal_length}"
             )
-        if livestream_camera not in {"head", "overhead"}:
-            raise ValueError(
-                f"livestream_camera must be 'head' or 'overhead', got {livestream_camera!r}"
-            )
         if robot_motion_mode != "kinematic":
             raise ValueError(
                 "Only robot_motion_mode='kinematic' is supported until a Go2 gait controller is added"
@@ -426,7 +332,6 @@ class IsaacSimExecutor:
         self._camera_fps = camera_fps
         self._camera_focal_length = float(camera_focal_length)
         self._robot_motion_mode = robot_motion_mode
-        self._livestream_camera = livestream_camera
         self._head_scan_yaw_rad = math.radians(head_scan_yaw_deg)
         self._head_scan_pitch_rad = math.radians(head_scan_pitch_deg)
         self._head_scan_period_frames = max(1, head_scan_period_frames)
@@ -436,12 +341,8 @@ class IsaacSimExecutor:
         self._validate_initial_placement = validate_initial_placement
         self._environment_planes = environment_planes or {}
         self._environment_plane_paths: set[str] = set()
-        self._overhead_camera_position = overhead_camera_position
-        self._overhead_camera_orient_wxyz = _euler_xyz_deg_to_quat_wxyz(
-            *_xyz_degrees(overhead_camera_orient, "overhead_camera_orient")
-        )
-        # go2/overhead 朝向偏移(欧拉角→四元数)：仅当外部显式传入 place_camera 的
-        # orientation_offset 时才使用。当前 look-at 已直接朝前，默认取恒等 [0,0,0]。
+        # go2 相机朝向偏移(欧拉角→四元数)：仅当外部显式传入非零偏移时才生效。
+        # 当前 look-at 已直接朝前，默认取恒等 [0,0,0]。
         self._go2_camera_orient_wxyz = _euler_xyz_deg_to_quat_wxyz(
             *_xyz_degrees(go2_camera_orient, "go2_camera_orient")
         )
@@ -526,16 +427,11 @@ class IsaacSimExecutor:
                 )
             )
         # ------------------------------------------------------------------
-        # Cameras. There are two independent cameras:
-        #   * head ("agent"): the lens the agent actually uses. It is a child
-        #     prim of the robot Xform, so it follows the body's world pose for
-        #     free once its local pose is set at construction time; no per-frame
-        #     repositioning is needed. An on-demand look-around scan perturbs
-        #     only its local orientation (see _update_head_camera_local_pose).
-        #   * overhead: a static observer at the scene centre, world-placed and
-        #     unparented. It is created only when it is actually used (explicit
-        #     position, or livestream target "overhead"). Its RGB is never fed
-        #     to the agent.
+        # The head ("agent") camera is the only lens: a child prim of the robot
+        # Xform, so it follows the body's world pose for free once its local
+        # pose is set at construction time; no per-frame repositioning is
+        # needed. An on-demand look-around scan perturbs only its local
+        # orientation (see _update_head_camera_local_pose).
         # ------------------------------------------------------------------
         height, width = camera_resolution
 
@@ -583,21 +479,6 @@ class IsaacSimExecutor:
                 f"actual parent is {actual_parent}"
             )
 
-        # The overhead observer is optional; create it only when it is used.
-        self._overhead_camera = None
-        if overhead_camera_position is not None or self._livestream_camera == "overhead":
-            self._overhead_camera = Camera(
-                prim_path="/World/overhead_camera",
-                position=np.zeros(3, dtype=np.float32),
-                orientation=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-                resolution=(width, height),
-                frequency=self._camera_fps,
-            )
-            self._overhead_camera.initialize()
-            self._overhead_camera.set_focal_length(self._camera_focal_length)
-            self._overhead_camera.add_distance_to_image_plane_to_frame()
-            self._place_overhead_camera()
-
         self._world.reset()
         self._set_robot_pose(self._initial_robot_position_usd, yaw=self._initial_robot_yaw_rad)
         for _ in range(2):
@@ -609,7 +490,7 @@ class IsaacSimExecutor:
         # (a no-op scan perturbation since _head_scan_frames starts at 0).
         self._update_head_camera_local_pose()
         if bind_viewport_to_camera:
-            self._bind_viewport(self._livestream_camera_path())
+            self._bind_viewport(self._head_camera_path)
         for _ in range(3):
             self._world.step(render=True)
 
@@ -624,12 +505,6 @@ class IsaacSimExecutor:
         viewport = get_active_viewport()
         if viewport is not None:
             viewport.camera_path = camera_path
-
-    # 【方法】返回流媒体要用的相机路径：overhead 优先(若已创建)，否则 head。
-    def _livestream_camera_path(self) -> str:
-        if self._livestream_camera == "overhead" and self._overhead_camera is not None:
-            return "/World/overhead_camera"
-        return self._head_camera_path
 
     # 【方法】在 World 建立前，经 SimulationApp 的 USD context 打开环境场景。
     # 【分支】up_axis='y' 时：写一个临时 .usda 包装层，把场景放入 /World/scene 子层并
@@ -910,55 +785,6 @@ class IsaacSimExecutor:
 
         # Do not pass translation here: its fixed local extrinsic must not be reset.
         self._camera.set_local_pose(orientation=orientation)
-
-    # 【方法】启动时一次性放置静态俯视观察者(场地中心上方)。
-    # 【算法】eye = 显式位置(若有) 或 由场景包围盒推导(中心 X/Y，高于天花板 3×高度跨度)；
-    #        place_camera(eye, 场景中心, up=+Z, 叠加 config 朝向偏移)。
-    # 【原因】俯视相机不动，仅观察全局；其 RGB 不喂给 agent。
-    def _place_overhead_camera(self) -> None:
-        """Place the static overhead observer at the scene centre, once at startup.
-
-        The overhead camera never moves: it observes the whole scene from above.
-        Its eye is an explicit position if given, otherwise derived from the
-        scene's world bounds (centred in X/Y, raised above the ceiling).
-        """
-        if self._overhead_camera is None:
-            return
-        lower, upper = self._environment_bounds
-        scene_center = (lower + upper) * 0.5
-
-        if self._overhead_camera_position is not None:
-            camera_eye = self._pose_to_usd(self._overhead_camera_position)
-        else:
-            height_span = max(float(upper[2] - lower[2]), 1.0)
-            camera_eye = np.array(
-                [
-                    float(scene_center[0]),
-                    float(scene_center[1]),
-                    float(upper[2] + 3.0 * height_span),
-                ],
-                dtype=np.float32,
-            )
-
-        # 俯视相机朝下看(look-at 场景中心)，world up 取 +Z；look-at 退化处理已覆盖
-        # 正上方情形，无需再叠加额外朝向偏移。
-        place_camera(
-            self._overhead_camera,
-            camera_eye,
-            scene_center,
-            up=(0.0, 0.0, 1.0),
-        )
-
-        
-    # 【方法】返回俯视相机 RGB(仅用于观测/调试，绝不喂给 agent)；未创建则 None。
-    def get_overhead_rgb(self) -> np.ndarray | None:
-        """Return the observer camera frame; this is never passed to the agent."""
-        if self._overhead_camera is None:
-            return None
-        rgba = self._overhead_camera.get_rgba()
-        if rgba is None or not rgba.size:
-            return None
-        return rgba[:, :, :3].astype(np.uint8)
 
     # 【方法】放置一个真实物理模拟的目标立方体(用于 ObjectNav 类寻找任务)。
     # 【原因】给寻找任务一个可碰撞、可渲染的真实目标；随后 world.reset() 生效。

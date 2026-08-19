@@ -1,7 +1,0 @@
-pointcloud_evaluation:
-  prediction: outputs/lingbot/courthouse_points.npz
-  ground_truth: data/ground_truth/courthouse_points.npz
-  points_key: points
-  threshold_m: 0.05
-  alignment: none
-  max_points: 20000
