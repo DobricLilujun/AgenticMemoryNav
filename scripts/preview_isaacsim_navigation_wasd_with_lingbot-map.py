@@ -259,6 +259,7 @@ def main() -> int:
         local_submap_stability_threshold_m=float(mapping_config.get("local_submap_stability_threshold_m", 0.50)),
         local_submap_max_points_per_frame=int(mapping_config.get("local_submap_max_points_per_frame", 20_000)),
     )
+    
     map_viewer = None if args.no_map_view else RealtimePointCloudViewer(port=args.map_port)
     print(f"LingBot-Map 3D viewer: http://<this-host>:{args.map_port}/", flush=True)
 

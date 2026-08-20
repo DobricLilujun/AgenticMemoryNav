@@ -55,6 +55,17 @@ class LingBotMapAgentClient:
         agent_path: str | os.PathLike[str] = _AGENT_PATH,
         start_timeout_s: float = 180.0,
     ) -> None:
+        if not checkpoint or not str(checkpoint).strip():
+            raise ValueError(
+                "LingBot checkpoint path is empty. "
+                "Provide --lingbot-checkpoint or set a valid default path."
+            )
+        checkpoint_path = Path(str(checkpoint)).expanduser().resolve()
+        if not checkpoint_path.is_file():
+            raise FileNotFoundError(
+                f"LingBot checkpoint not found: {checkpoint_path}. "
+                "Provide --lingbot-checkpoint with an existing .pt file."
+            )
         print("Starting LingBot-Map agent; loading checkpoint...", flush=True)
         # The agent must run in a clean environment: Isaac Sim's CARB/ISAAC/LD_* vars
         # clash with the LingBot (torch/CUDA) runtime, so strip them for the child.
@@ -75,7 +86,7 @@ class LingBotMapAgentClient:
                 python_executable,
                 str(agent_path),
                 "--checkpoint",
-                checkpoint,
+                str(checkpoint_path),
                 "--image-size",
                 str(image_size),
                 "--keyframe-interval",

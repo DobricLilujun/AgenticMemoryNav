@@ -133,7 +133,14 @@ class RealtimePointCloudViewer:
         rgb: "np.ndarray | None" = None,
     ) -> None:
         cloud = np.asarray(points, dtype=np.float32)
-        if cloud.ndim != 2 or cloud.shape[1] != 3:
+        if cloud.size == 0:
+            cloud = np.empty((0, 3), dtype=np.float32)
+        elif cloud.ndim == 1:
+            if cloud.shape[0] == 3:
+                cloud = cloud.reshape(1, 3)
+            else:
+                raise ValueError("Viewer point cloud must have shape (N, 3)")
+        elif cloud.ndim != 2 or cloud.shape[1] != 3:
             raise ValueError("Viewer point cloud must have shape (N, 3)")
         finite = np.isfinite(cloud).all(axis=1)
         cloud = cloud[finite]

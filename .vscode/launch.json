@@ -5,7 +5,7 @@
             "name": "Isaac Sim Preview (Livestream)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/scripts/preview_isaacsim_navigation_wasd.py",
+            "program": "${workspaceFolder}/scripts/preview_isaacsim_navigation_wasd_with_lingbot-map.py",
             "args": [
                 "--config",
                 "configs/isaacsim_realtime_agent_internscenes.yaml",
