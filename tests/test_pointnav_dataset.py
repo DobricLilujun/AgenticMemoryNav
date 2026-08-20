@@ -1,4 +1,4 @@
-from agentic_memory_nav.datasets.pointnav import PointNavDataset
+from agentic_memory_nav.agent.datasets.pointnav import PointNavDataset
 
 
 def test_generates_requested_episode_count_deterministically():

@@ -34,14 +34,14 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agentic_memory_nav.agent.memory_agent import MemoryAgent  # noqa: E402
-from agentic_memory_nav.agent.navigation_agent import NavigationAgent  # noqa: E402
+from agentic_memory_nav.agent.realtime.memory_agent import MemoryAgent  # noqa: E402
+from agentic_memory_nav.agent.realtime.navigation_agent import NavigationAgent  # noqa: E402
 from agentic_memory_nav.common.config import load_config  # noqa: E402
 from agentic_memory_nav.common.logging import configure_logging  # noqa: E402
 from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun  # noqa: E402
-from agentic_memory_nav.execution.isaacsim_adapter import IsaacSimExecutor  # noqa: E402
-from agentic_memory_nav.execution.safety_controller import SafetyController  # noqa: E402
-from agentic_memory_nav.orchestration.pipeline import NavigationPipeline  # noqa: E402
+from agentic_memory_nav.agent.execution.isaacsim_adapter import IsaacSimExecutor  # noqa: E402
+from agentic_memory_nav.agent.execution.safety_controller import SafetyController  # noqa: E402
+from agentic_memory_nav.agent.orchestration.pipeline import NavigationPipeline  # noqa: E402
 
 
 def _as_vector3(value: object, name: str) -> tuple[float, float, float] | None:

@@ -1,7 +1,7 @@
 import numpy as np
 
 from agentic_memory_nav.common.types import MappingUpdate, Pose3D
-from agentic_memory_nav.mapping.local_submap import LocalSubmapBuilder
+from agentic_memory_nav.agent.mapping.local_submap import LocalSubmapBuilder
 
 
 def _update(frame_id: str, center_x: float) -> MappingUpdate:

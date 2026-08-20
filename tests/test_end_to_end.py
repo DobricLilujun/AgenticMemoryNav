@@ -3,7 +3,7 @@ import json
 
 from agentic_memory_nav.common.logging import configure_logging
 from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun
-from agentic_memory_nav.orchestration.pipeline import NavigationPipeline
+from agentic_memory_nav.agent.orchestration.pipeline import NavigationPipeline
 
 
 def test_red_cup_end_to_end(tmp_path):

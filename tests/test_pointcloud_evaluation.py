@@ -3,8 +3,8 @@ import pytest
 
 from agentic_memory_nav.evaluation.pointcloud import evaluate_pointclouds, load_npz_pointcloud
 from agentic_memory_nav.evaluation.trajectory_alignment import align_similarity, apply_similarity
-from agentic_memory_nav.geometry.ground_truth import backproject_depth_to_world
-from agentic_memory_nav.geometry.lidar import flat_scan_to_points
+from agentic_memory_nav.agent.geometry.ground_truth import backproject_depth_to_world
+from agentic_memory_nav.agent.geometry.lidar import flat_scan_to_points
 
 
 def test_pointcloud_evaluation_reports_perfect_reconstruction():

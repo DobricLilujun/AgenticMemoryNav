@@ -26,14 +26,14 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from agentic_memory_nav.common.config import load_config  # noqa: E402
 from agentic_memory_nav.common.logging import configure_logging  # noqa: E402
-from agentic_memory_nav.datasets.objectnav import load_experiments  # noqa: E402
+from agentic_memory_nav.agent.datasets.objectnav import load_experiments  # noqa: E402
 from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun  # noqa: E402
 from agentic_memory_nav.evaluation.metrics import goal_reached  # noqa: E402
-from agentic_memory_nav.execution.isaacsim_objectnav_adapter import (  # noqa: E402
+from agentic_memory_nav.agent.execution.isaacsim_objectnav_adapter import (  # noqa: E402
     IsaacSimObjectNavExecutor,
 )
-from agentic_memory_nav.execution.safety_controller import SafetyController  # noqa: E402
-from agentic_memory_nav.orchestration.pipeline import NavigationPipeline  # noqa: E402
+from agentic_memory_nav.agent.execution.safety_controller import SafetyController  # noqa: E402
+from agentic_memory_nav.agent.orchestration.pipeline import NavigationPipeline  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

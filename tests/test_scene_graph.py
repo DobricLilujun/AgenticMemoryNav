@@ -1,8 +1,8 @@
 import numpy as np
 
 from agentic_memory_nav.common.types import FrameObservation, InstanceGeometry, SceneTriple
-from agentic_memory_nav.mapping.mock_mapper import MockMapper
-from agentic_memory_nav.perception.mock_perception import MockPerception
+from agentic_memory_nav.agent.mapping.mock_mapper import MockMapper
+from agentic_memory_nav.agent.perception.mock_perception import MockPerception
 from agentic_memory_nav.scene_graph.graph import SceneGraph
 from agentic_memory_nav.scene_graph.updater import SceneGraphUpdater
 

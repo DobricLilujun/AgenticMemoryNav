@@ -1,6 +1,6 @@
 import json
 
-from agentic_memory_nav.datasets.objectnav import load_experiments
+from agentic_memory_nav.agent.datasets.objectnav import load_experiments
 
 SAMPLE = {
     "experiments": [

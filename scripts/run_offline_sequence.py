@@ -13,8 +13,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from agentic_memory_nav.common.config import load_config  # noqa: E402
 from agentic_memory_nav.common.types import FrameObservation  # noqa: E402
-from agentic_memory_nav.datasets.base import NumpyRGBDSequence  # noqa: E402
-from agentic_memory_nav.mapping.mock_mapper import MockMapper  # noqa: E402
+from agentic_memory_nav.agent.datasets.base import NumpyRGBDSequence  # noqa: E402
+from agentic_memory_nav.agent.mapping.mock_mapper import MockMapper  # noqa: E402
 
 
 def video_frames(path: Path) -> list[FrameObservation]:

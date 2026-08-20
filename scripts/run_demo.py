@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from agentic_memory_nav.common.config import load_config  # noqa: E402
 from agentic_memory_nav.common.logging import configure_logging  # noqa: E402
 from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun  # noqa: E402
-from agentic_memory_nav.orchestration.pipeline import NavigationPipeline  # noqa: E402
+from agentic_memory_nav.agent.orchestration.pipeline import NavigationPipeline  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

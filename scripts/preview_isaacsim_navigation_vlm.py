@@ -38,15 +38,15 @@ import sys
 
 sys.path.insert(0, str(ROOT / "src"))
 
-from agentic_memory_nav.agent.vlm_navigation_agent import (  # noqa: E402
+from agentic_memory_nav.agent.vlm.navigation import (  # noqa: E402
     VLMSelfDecidingNavigationAgent,
 )
 from agentic_memory_nav.common.config import load_config  # noqa: E402
 from agentic_memory_nav.common.types import Pose3D  # noqa: E402
 from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun  # noqa: E402
-from agentic_memory_nav.execution.isaacsim_adapter import IsaacSimExecutor  # noqa: E402
-from agentic_memory_nav.execution.safety_controller import SafetyController  # noqa: E402
-from agentic_memory_nav.perception.subagent import SubAgentDispatcher  # noqa: E402
+from agentic_memory_nav.agent.execution.isaacsim_adapter import IsaacSimExecutor  # noqa: E402
+from agentic_memory_nav.agent.execution.safety_controller import SafetyController  # noqa: E402
+from agentic_memory_nav.agent.lingbot.client import SubAgentDispatcher  # noqa: E402
 
 
 def _parse_robot_start_pose(

@@ -19,14 +19,14 @@ sys.path.insert(0, str(ROOT / "src"))
 from agentic_memory_nav.common.config import load_config  # noqa: E402
 from agentic_memory_nav.common.logging import configure_logging  # noqa: E402
 from agentic_memory_nav.common.types import ActionIntent, ActionType, new_id  # noqa: E402
-from agentic_memory_nav.datasets.pointnav import PointNavDataset  # noqa: E402
+from agentic_memory_nav.agent.datasets.pointnav import PointNavDataset  # noqa: E402
 from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun  # noqa: E402
 from agentic_memory_nav.evaluation.metrics import (  # noqa: E402
     goal_reached,
     success_weighted_path_length,
 )
-from agentic_memory_nav.execution.isaacsim_adapter import IsaacSimExecutor  # noqa: E402
-from agentic_memory_nav.execution.safety_controller import SafetyController  # noqa: E402
+from agentic_memory_nav.agent.execution.isaacsim_adapter import IsaacSimExecutor  # noqa: E402
+from agentic_memory_nav.agent.execution.safety_controller import SafetyController  # noqa: E402
 
 
 def _planar_distance(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:

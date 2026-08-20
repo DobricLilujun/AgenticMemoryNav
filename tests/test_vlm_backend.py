@@ -8,7 +8,7 @@ from agentic_memory_nav.common.types import (
     MappingUpdate,
     Pose3D,
 )
-from agentic_memory_nav.perception.vlm_backend import VLMBackend
+from agentic_memory_nav.agent.vlm.backend import VLMBackend
 
 
 class DummyResponse:

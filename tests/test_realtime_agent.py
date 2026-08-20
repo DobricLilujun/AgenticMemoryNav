@@ -1,6 +1,6 @@
 import numpy as np
 
-from agentic_memory_nav.agent.realtime_agent import RealtimeAgent
+from agentic_memory_nav.agent.realtime.realtime_agent import RealtimeAgent
 from agentic_memory_nav.common.types import CameraIntrinsics, FrameObservation, Pose3D
 
 

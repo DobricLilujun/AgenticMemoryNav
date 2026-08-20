@@ -4,9 +4,9 @@ import pytest
 from agentic_memory_nav.common.logging import configure_logging
 from agentic_memory_nav.common.types import FrameObservation, MemoryType
 from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun
-from agentic_memory_nav.mapping.lingbot_map_adapter import LingBotMapAdapter
-from agentic_memory_nav.orchestration.pipeline import NavigationPipeline
-from agentic_memory_nav.perception.vlm_backend import VLMBackend
+from agentic_memory_nav.agent.lingbot.adapter import LingBotMapAdapter
+from agentic_memory_nav.agent.orchestration.pipeline import NavigationPipeline
+from agentic_memory_nav.agent.vlm.backend import VLMBackend
 
 
 def _base_config(tmp_path):

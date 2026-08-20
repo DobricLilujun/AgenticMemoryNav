@@ -1,8 +1,8 @@
 import numpy as np
 
 from agentic_memory_nav.common.types import FrameObservation, Pose3D
-from agentic_memory_nav.mapping.lingbot_map_adapter import LingBotMapAdapter
-from agentic_memory_nav.mapping.mock_mapper import MockMapper
+from agentic_memory_nav.agent.lingbot.adapter import LingBotMapAdapter
+from agentic_memory_nav.agent.mapping.mock_mapper import MockMapper
 
 
 def test_mock_mapper_stream_and_state(tmp_path):

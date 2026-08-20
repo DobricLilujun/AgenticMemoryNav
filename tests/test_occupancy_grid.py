@@ -1,4 +1,4 @@
-from agentic_memory_nav.mapping.occupancy_grid import build_occupancy_grid, shortest_path_distance
+from agentic_memory_nav.agent.mapping.occupancy_grid import build_occupancy_grid, shortest_path_distance
 
 
 def test_shortest_path_direct_when_unobstructed():

@@ -23,7 +23,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agentic_memory_nav.geometry.ground_truth import backproject_depth_to_world  # noqa: E402
+from agentic_memory_nav.agent.geometry.ground_truth import backproject_depth_to_world  # noqa: E402
 
 
 def _matrix(payload: object, name: str, expected_shape: tuple[int, int]) -> np.ndarray:

@@ -7,8 +7,8 @@ from agentic_memory_nav.common.types import (
     ObjectObservation,
     Pose3D,
 )
-from agentic_memory_nav.geometry.pointcloud_store import PointCloudStore
-from agentic_memory_nav.perception.instance_segmentation import (
+from agentic_memory_nav.agent.geometry.pointcloud_store import PointCloudStore
+from agentic_memory_nav.agent.perception.instance_segmentation import (
     BoundingBoxSegmenter,
     InstanceGeometryEnricher,
 )

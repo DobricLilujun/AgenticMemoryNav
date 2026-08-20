@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from agentic_memory_nav.common.types import FrameObservation  # noqa: E402
-from agentic_memory_nav.mapping.mock_mapper import MockMapper  # noqa: E402
-from agentic_memory_nav.perception.mock_perception import MockPerception  # noqa: E402
+from agentic_memory_nav.agent.mapping.mock_mapper import MockMapper  # noqa: E402
+from agentic_memory_nav.agent.perception.mock_perception import MockPerception  # noqa: E402
 from agentic_memory_nav.scene_graph.graph import SceneGraph  # noqa: E402
 from agentic_memory_nav.scene_graph.updater import SceneGraphUpdater  # noqa: E402
 

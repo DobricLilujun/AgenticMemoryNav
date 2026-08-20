@@ -1,9 +1,9 @@
 import numpy as np
 
 from agentic_memory_nav.common.types import ActionIntent, ActionType, new_id
-from agentic_memory_nav.execution.isaacsim_adapter import _euler_xyz_deg_to_quat_wxyz
-from agentic_memory_nav.execution.safety_controller import SafetyController
-from agentic_memory_nav.execution.unitree_sim import UnitreeSimExecutor
+from agentic_memory_nav.agent.execution.isaacsim_adapter import _euler_xyz_deg_to_quat_wxyz
+from agentic_memory_nav.agent.execution.safety_controller import SafetyController
+from agentic_memory_nav.agent.execution.unitree_sim import UnitreeSimExecutor
 
 
 def test_waypoint_execution_and_emergency_stop():
@@ -42,7 +42,7 @@ def test_isaacsim_executor_fails_closed_when_unavailable():
 
         pytest.skip("isaacsim is importable in this environment; fail-closed path not exercised")
 
-    from agentic_memory_nav.execution.isaacsim_adapter import IsaacSimExecutor
+    from agentic_memory_nav.agent.execution.isaacsim_adapter import IsaacSimExecutor
 
     try:
         IsaacSimExecutor(scene=None, safety=SafetyController())

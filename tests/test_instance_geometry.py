@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 
 from agentic_memory_nav.common.types import CameraIntrinsics, MappingUpdate, Pose3D
-from agentic_memory_nav.geometry.backprojection import backproject_mask
-from agentic_memory_nav.geometry.pointcloud_store import PointCloudStore
+from agentic_memory_nav.agent.geometry.backprojection import backproject_mask
+from agentic_memory_nav.agent.geometry.pointcloud_store import PointCloudStore
 
 
 def test_backproject_mask_filters_invalid_depth_and_transforms_to_world():

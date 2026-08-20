@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agentic_memory_nav.agent.single_agent import SingleAgent
+from agentic_memory_nav.agent.realtime.single_agent import SingleAgent
 
 
 def test_single_agent_runs_minimal_task(tmp_path):
