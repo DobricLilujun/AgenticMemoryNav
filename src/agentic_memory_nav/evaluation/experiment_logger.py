@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ class ExperimentRun:
         self.path.mkdir(parents=True, exist_ok=False)
         self.artifacts = self.path / "artifacts"
         self.artifacts.mkdir()
+        self._previous_cwd = Path.cwd()
+        os.chdir(self.path)
         self.write_yaml("config.yaml", self._redact(config))
         self._trajectory = (self.path / "trajectory.jsonl").open("w", encoding="utf-8")
 
@@ -41,6 +44,8 @@ class ExperimentRun:
 
     def close(self) -> None:
         self._trajectory.close()
+        if getattr(self, "_previous_cwd", None) is not None:
+            os.chdir(self._previous_cwd)
 
     @classmethod
     def _redact(cls, value: Any, key: str = "") -> Any:
