@@ -1,7 +1,11 @@
 lingbot-map/
 habitat-lab/
-external-lib/
-
+external-lib/lingbot-map
+external-lib/Open3DSG
+external-lib/partnr-planner
+external-lib/InternScenes/assets
+external-lib/InternScenes/data
+external-lib/InternScenes/tutorial
 .venv/
 __pycache__/
 *.py[cod]
@@ -15,3 +19,4 @@ outputs/
 .lingbot-venv/
 issacsim-assets/
 NvStreamer-*
+
