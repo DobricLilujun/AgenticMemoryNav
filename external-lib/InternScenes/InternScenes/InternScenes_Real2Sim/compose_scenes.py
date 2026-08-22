@@ -12,7 +12,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from pathlib import Path
-BASE_DIR = Path(os.getcwd()).parent
+BASE_DIR = Path(__file__).resolve().parents[2]  # FIXED: package root, cwd-independent
 
 ASSET_LIBRARY_FOLDER = os.path.join(BASE_DIR, "data/asset_library")
 SCENE_SAVE_DIR = os.path.join(BASE_DIR, "tutorial/examples/composed_scenes")
@@ -261,6 +261,7 @@ class SceneComposer():
                 geometry.visual = empty_visual
             
         if output_glb_path != None:
+            Path(output_glb_path).parent.mkdir(parents=True, exist_ok=True)  # FIXED
             trimesh.exchange.export.export_mesh(scene, output_glb_path)
         return scene
 
@@ -274,21 +275,21 @@ class SceneComposer():
 
         if add_floor:
             try:
-                floor = trimesh.load(os.path.join(self.scene_files_dir, scene_name, "StructureMesh", "floor.glb"))
+                floor = trimesh.load(os.path.join(self.scene_info_dir, scene_name, "StructureMesh", "floor.glb"))
                 trimesh_scene.add_geometry(floor, geom_name=f"floor")
             except Exception as e:
                 print(f"Error adding floor: {e}")
 
         if add_wall:
             try:
-                wall = trimesh.load(os.path.join(self.scene_files_dir, scene_name, "StructureMesh", "wall.glb"))
+                wall = trimesh.load(os.path.join(self.scene_info_dir, scene_name, "StructureMesh", "wall.glb"))
                 trimesh_scene.add_geometry(wall, geom_name=f"wall")
             except Exception as e:
                 print(f"Error adding wall: {e}")
 
         if add_ceiling:
             try:
-                ceiling = trimesh.load(os.path.join(self.scene_files_dir, scene_name, "StructureMesh", "ceiling.glb"))
+                ceiling = trimesh.load(os.path.join(self.scene_info_dir, scene_name, "StructureMesh", "ceiling.glb"))
                 trimesh_scene.add_geometry(ceiling, geom_name=f"ceiling")
             except Exception as e:
                 print(f"Error adding ceiling: {e}")
@@ -301,6 +302,7 @@ class SceneComposer():
                 geometry.visual = empty_visual
             
         if output_glb_path != None:
+            Path(output_glb_path).parent.mkdir(parents=True, exist_ok=True)  # FIXED
             trimesh.exchange.export.export_mesh(trimesh_scene, output_glb_path)
             print(f"Composed glb scene has been saved to {output_glb_path}")
 

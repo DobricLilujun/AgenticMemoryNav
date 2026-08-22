@@ -1,4 +1,3 @@
---extra-index-url https://mirrors.aliyun.com/pypi/simple
 
 # Scientific Computing
 numpy==1.24.4

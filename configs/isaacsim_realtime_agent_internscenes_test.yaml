@@ -44,7 +44,7 @@ execution:
   #   light_rig=gray_studio 用 Isaac Sim 内置 Grey Studio 灯光(中性稳定)。
   # 机器人: Go2 物理版 USD; robot_motion_mode=kinematic 冻结全部腿部关节,
   #   导航只平移/旋转整个 Go2 身体(无步态/关节控制)。
-  scene: /home/snt/projects/AgenticMemoryNav/issacsim-assets/scene0000_01/usd/scene.usd
+  scene: /home/snt/projects/AgenticMemoryNav/issacsim-assets/scene0004_00/usd/scene.usd
   scene_up_axis: y
   light_rig: gray_studio
   robot_usd: /home/snt/projects/AgenticMemoryNav/issacsim-assets/Go2/configuration/go2_description_physics.usd
