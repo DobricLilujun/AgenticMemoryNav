@@ -18,7 +18,6 @@ from agentic_memory_nav.evaluation.metrics import (
     success_weighted_path_length,
 )
 from agentic_memory_nav.evaluation.visualization import render_run_artifacts
-from agentic_memory_nav.agent.execution.habitat_adapter import HabitatSimExecutor
 from agentic_memory_nav.agent.execution.isaacsim_adapter import IsaacSimExecutor
 from agentic_memory_nav.agent.execution.safety_controller import SafetyController
 from agentic_memory_nav.agent.execution.unitree_sim import UnitreeSimExecutor
@@ -86,16 +85,7 @@ class NavigationPipeline:
             self.executor = executor_override
         else:
             backend = str(execution.get("backend", "unitree_sim")).lower()
-            if backend == "habitat":
-                scene = execution.get("scene")
-                if not scene:
-                    raise ValueError("execution.scene is required when execution.backend=habitat")
-                self.executor = HabitatSimExecutor(
-                    scene=str(scene),
-                    safety=safety,
-                    max_speed=float(execution.get("max_speed", 0.5)),
-                )
-            elif backend == "isaacsim":
+            if backend == "isaacsim":
                 self.executor = IsaacSimExecutor(
                     scene=execution.get("scene"),
                     safety=safety,

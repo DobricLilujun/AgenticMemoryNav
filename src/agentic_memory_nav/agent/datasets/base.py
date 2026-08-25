@@ -41,28 +41,3 @@ class NumpyRGBDSequence:
                 provenance=[rgb_path.name],
             )
 
-
-class ETH3DAdapter(NumpyRGBDSequence):
-    @property
-    def limitations(self) -> str:
-        return (
-            "ETH3D supports reconstruction evaluation; it is not a language-navigation benchmark."
-        )
-
-
-class HabitatDatasetAdapter(NumpyRGBDSequence):
-    @property
-    def limitations(self) -> str:
-        return "Offline exports do not reproduce simulator dynamics or interactive task state."
-
-
-class RobotVideoAdapter(NumpyRGBDSequence):
-    @property
-    def limitations(self) -> str:
-        return "Calibration, timestamp synchronization, and poses require sidecar metadata."
-
-
-class LingBotExampleAdapter(NumpyRGBDSequence):
-    @property
-    def limitations(self) -> str:
-        return "Example images support geometry smoke tests, not navigation metrics."

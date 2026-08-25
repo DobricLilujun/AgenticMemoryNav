@@ -19,6 +19,13 @@ from agentic_memory_nav.common.types import (
     Pose3D,
     Vector3,
 )
+from agentic_memory_nav.agent.execution.discrete_actions import (
+    LOOK_PITCH_LIMIT_RAD,
+    LOOK_STEP_RAD,
+    MOVE_STEP_M,
+    TURN_STEP_RAD,
+    DiscreteAction,
+)
 from agentic_memory_nav.agent.execution.safety_controller import SafetyController, SafetyError
 
 
@@ -35,6 +42,7 @@ class UnitreeSimExecutor:
         self._collision = False
         self._stopped = True
         self._frame_index = 0
+        self._manual_pitch_offset_rad = 0.0
 
     # 【方法】重置：位姿归零、清碰撞/停状态、帧计数归零。
     def reset(self) -> None:
@@ -42,6 +50,7 @@ class UnitreeSimExecutor:
         self._collision = False
         self._stopped = True
         self._frame_index = 0
+        self._manual_pitch_offset_rad = 0.0
 
     # 【方法】返回当前位姿 Pose3D。
     def get_state(self) -> Pose3D:
@@ -91,6 +100,50 @@ class UnitreeSimExecutor:
         )
         return ExecutionFeedback(
             "velocity", True, self._state, False, time.perf_counter() - started, "executed"
+        )
+
+    # 【方法】标准 6-action 离散指令；语义与 IsaacSimExecutor.apply_discrete_action 一致。
+    # 【原因】本执行器无碰撞体，move_forward 无碰撞预检，仅按当前 yaw 前移。
+    def apply_discrete_action(self, action: DiscreteAction | str) -> ExecutionFeedback:
+        started = time.perf_counter()
+        action = DiscreteAction(action)
+
+        if action is DiscreteAction.STOP:
+            self.stop()
+            return ExecutionFeedback(action.value, True, self._state, self._collision, 0.0, "stopped")
+
+        if action in (DiscreteAction.LOOK_UP, DiscreteAction.LOOK_DOWN):
+            sign = 1.0 if action is DiscreteAction.LOOK_UP else -1.0
+            self._manual_pitch_offset_rad = max(
+                -LOOK_PITCH_LIMIT_RAD,
+                min(LOOK_PITCH_LIMIT_RAD, self._manual_pitch_offset_rad + sign * LOOK_STEP_RAD),
+            )
+            self._stopped = False
+            return ExecutionFeedback(
+                action.value, True, self._state, self._collision, time.perf_counter() - started, "executed"
+            )
+
+        if action in (DiscreteAction.TURN_LEFT, DiscreteAction.TURN_RIGHT):
+            sign = 1.0 if action is DiscreteAction.TURN_LEFT else -1.0
+            self._state = Pose3D(position=self._state.position, yaw=self._state.yaw + sign * TURN_STEP_RAD)
+            self._stopped = False
+            return ExecutionFeedback(
+                action.value, True, self._state, self._collision, time.perf_counter() - started, "executed"
+            )
+
+        # move_forward
+        yaw = self._state.yaw
+        self._state = Pose3D(
+            position=(
+                self._state.position[0] + MOVE_STEP_M * math.cos(yaw),
+                self._state.position[1] + MOVE_STEP_M * math.sin(yaw),
+                self._state.position[2],
+            ),
+            yaw=yaw,
+        )
+        self._stopped = False
+        return ExecutionFeedback(
+            action.value, True, self._state, self._collision, time.perf_counter() - started, "executed"
         )
 
     # 【方法】航点指令。

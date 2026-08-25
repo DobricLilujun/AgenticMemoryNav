@@ -11,4 +11,4 @@ lint:
 	ruff format --check .
 
 demo:
-	python scripts/run_demo.py --config configs/dev.yaml
+	python scripts/run_demo.py --config configs/default.yaml

@@ -39,6 +39,13 @@ from agentic_memory_nav.common.types import (
     Pose3D,
     Vector3,
 )
+from agentic_memory_nav.agent.execution.discrete_actions import (
+    LOOK_PITCH_LIMIT_RAD,
+    LOOK_STEP_RAD,
+    MOVE_STEP_M,
+    TURN_STEP_RAD,
+    DiscreteAction,
+)
 from agentic_memory_nav.agent.execution.safety_controller import SafetyController, SafetyError
 
 _SIMULATION_APP: Any | None = None
@@ -58,11 +65,6 @@ _SIMULATION_APP: Any | None = None
 # head 镜头现在是机器人的子节点(parented)：这个常量就是它的固定局部朝向，
 # 只在构造时通过 set_local_pose 设一次，之后靠父节点(机器人)的世界位姿带动，
 # 不再每帧重新 look-at。
-
-# 未使用的旧占位朝向常量，保留仅为历史参考（isaacsim_objectnav_adapter 仍引用它）。
-_FORWARD_CAMERA_ORIENTATION_WXYZ = np.array(
-    [math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0], dtype=np.float32
-)
 
 # Body origin height and head-mounted camera offset for the Unitree Go2 asset, whose
 # authored default pose is standing. The camera sits clear of the head mesh, which
@@ -338,6 +340,8 @@ class IsaacSimExecutor:
         # Armed look-around window: 0 => the head lens holds still and points
         # straight ahead with the body. A scan only runs while this is > 0.
         self._head_scan_frames = 0
+        # Persistent manual look_up/look_down offset, set via apply_discrete_action.
+        self._manual_pitch_offset_rad = 0.0
         self._validate_initial_placement = validate_initial_placement
         self._environment_planes = environment_planes or {}
         self._environment_plane_paths: set[str] = set()
@@ -763,12 +767,12 @@ class IsaacSimExecutor:
         orientation, preserving the same physical semantics as the former world look-at.
         """
         scan_yaw = 0.0
-        scan_pitch = 0.0
+        scan_pitch = self._manual_pitch_offset_rad
         if self._head_scan_frames > 0:
             self._head_scan_frames -= 1
             phase = 2.0 * math.pi * self._frame_index / self._head_scan_period_frames
             scan_yaw = self._head_scan_yaw_rad * math.sin(phase)
-            scan_pitch = self._head_scan_pitch_rad * math.sin(phase * 0.5)
+            scan_pitch += self._head_scan_pitch_rad * math.sin(phase * 0.5)
 
         if scan_yaw == 0.0 and scan_pitch == 0.0:
             orientation = self._camera_base_orientation_wxyz
@@ -823,13 +827,6 @@ class IsaacSimExecutor:
     def get_state(self) -> Pose3D:
         position, _ = self._robot.get_world_pose()
         return self._usd_to_pose(position, self._yaw)
-
-    # 【方法】把机器人瞬移到任意位姿(仅基准测试用)；清碰撞、帧计数归零。
-    def teleport(self, position: Vector3) -> None:
-        """Place the robot at an arbitrary pose; used by benchmark harnesses only."""
-        self._set_robot_pose(self._pose_to_usd(position), yaw=0.0)
-        self._collision = False
-        self._frame_index = 0
 
     # 【方法】按需更新 head 镜头的局部扫视扰动，再渲染一帧，取 RGB+深度。
     # 【原因】head 镜头已 parented 到机器人，随其世界位姿自动跟随，无需每帧重新
@@ -910,6 +907,60 @@ class IsaacSimExecutor:
             self._collision,
             time.perf_counter() - started,
             "executed",
+        )
+
+    # 【方法】标准 6-action 离散指令(turn_left/turn_right/move_forward/stop/look_up/look_down)。
+    # 【流程】转向/看向：原地修改 yaw 或 head pitch(不做碰撞预检)；
+    #        前进：按当前 yaw 前移 MOVE_STEP_M，复用 _can_move_to 碰撞预检。
+    def apply_discrete_action(self, action: DiscreteAction | str) -> ExecutionFeedback:
+        started = time.perf_counter()
+        action = DiscreteAction(action)
+
+        if action is DiscreteAction.STOP:
+            self.stop()
+            return ExecutionFeedback(
+                action.value, True, self.get_state(), self._collision, 0.0, "stopped"
+            )
+
+        if action in (DiscreteAction.LOOK_UP, DiscreteAction.LOOK_DOWN):
+            sign = 1.0 if action is DiscreteAction.LOOK_UP else -1.0
+            self._manual_pitch_offset_rad = max(
+                -LOOK_PITCH_LIMIT_RAD,
+                min(LOOK_PITCH_LIMIT_RAD, self._manual_pitch_offset_rad + sign * LOOK_STEP_RAD),
+            )
+            self._stopped = False
+            self._world.step(render=False)
+            return ExecutionFeedback(
+                action.value, True, self.get_state(), self._collision, time.perf_counter() - started, "executed"
+            )
+
+        if action in (DiscreteAction.TURN_LEFT, DiscreteAction.TURN_RIGHT):
+            sign = 1.0 if action is DiscreteAction.TURN_LEFT else -1.0
+            position, _ = self._robot.get_world_pose()
+            yaw = self._yaw + sign * TURN_STEP_RAD
+            self._set_robot_pose(position, yaw=yaw)
+            self._stopped = False
+            self._world.step(render=False)
+            return ExecutionFeedback(
+                action.value, True, self.get_state(), self._collision, time.perf_counter() - started, "executed"
+            )
+
+        # move_forward
+        position, _ = self._robot.get_world_pose()
+        destination = position + np.array(
+            [MOVE_STEP_M * math.cos(self._yaw), MOVE_STEP_M * math.sin(self._yaw), 0.0],
+            dtype=np.float32,
+        )
+        can_move, message = self._can_move_to(destination, self._yaw)
+        if not can_move:
+            self.stop()
+            self._collision = True
+            return ExecutionFeedback(action.value, False, self.get_state(), True, 0.0, message)
+        self._set_robot_pose(destination, yaw=self._yaw)
+        self._stopped = False
+        self._world.step(render=False)
+        return ExecutionFeedback(
+            action.value, True, self.get_state(), self._collision, time.perf_counter() - started, "executed"
         )
 
     # 【方法】航点指令。

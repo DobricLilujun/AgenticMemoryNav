@@ -24,11 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--execution-backend",
         default=None,
-        choices=("unitree_sim", "habitat", "isaacsim"),
+        choices=("unitree_sim", "isaacsim"),
         help="Optional execution backend override",
     )
     parser.add_argument(
-        "--scene", default=None, help="Optional scene path for habitat/isaacsim backends"
+        "--scene", default=None, help="Optional scene path for the isaacsim backend"
     )
     parser.add_argument(
         "--instruction",
