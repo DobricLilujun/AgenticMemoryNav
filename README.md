@@ -164,6 +164,21 @@ Go2, and dynamic-bound ground/ceiling planes:
 - `scripts/preview_isaacsim_navigation_wasd.py` — continuous WASD/QE velocity teleop
   (`send_velocity_command`), for free-form driving rather than discrete steps.
 
+- `scripts/preview_isaacsim_navigation_vlm_discrete.py` — **VLM-driven object search
+  using only the standard 6 discrete actions** (`turn_left`, `turn_right`,
+  `move_forward`, `look_up`, `look_down`, `stop`). No LingBot-Map, no scene graph,
+  no memory: the VLM looks at the current RGB frame and decides the next action.
+  Default instruction: "Find the green shoe in the room". Turn/move/look step sizes
+  are configurable (`--turn-step-deg`, `--move-step-m`, `--look-step-deg`); a blocked
+  `move_forward` never ends the episode (the robot turns away and keeps deciding),
+  and the camera is automatically re-leveled if a `look_up`/`look_down` didn't find
+  the target.
+
+  ```bash
+  ~/isaacsim/python.sh scripts/preview_isaacsim_navigation_vlm_discrete.py \
+      --config configs/isaacsim_realtime_agent_internscenes.yaml --livestream
+  ```
+
 A LingBot-Map variant (`preview_isaacsim_navigation_wasd_with_lingbot-map.py`) drives
 the same WASD control while streaming the reconstructed point cloud to an in-browser
 3D viewer, and `run_isaacsim_realtime_agent.py` / `preview_isaacsim_navigation_vlm.py`
@@ -205,3 +220,43 @@ ruff format --check .
 	available.
 - Real robot interfaces are disabled by default and cannot be enabled accidentally by
 	an API response or planner output.
+
+
+## Commandline for Demo Identification
+
+Action Simulation:
+
+~/isaacsim/python.sh scripts/preview_isaacsim_navigation_actions.py \
+    --config configs/isaacsim_realtime_agent_internscenes.yaml \
+    --livestream \
+    --public-ip 127.0.0.1
+
+lingbot-Video Simulation
+
+.lingbot-venv/bin/python3 scripts/lingbot_web_demo/server.py \
+    --port 8123 \
+    --video /home/snt/projects/AgenticMemoryNav/outputs/lingbot_demo/paris-street.mp4 \
+    --fps 10 \
+    --checkpoint external-lib/lingbot-map/models/lingbot-map/lingbot-map.pt \
+    --num-scale-frames 8 \
+    --keyframe-interval 1 \
+    --conf-threshold 1.5 \
+    --point-stride 8
+
+
+Full VLM Simulation
+
+cd /home/snt/projects/AgenticMemoryNav
+conda deactivate
+~/isaacsim/python.sh scripts/preview_isaacsim_navigation_vlm_discrete.py \
+    --config configs/isaacsim_realtime_agent_internscenes.yaml \
+    --instruction "Find the green shoe in the room" \
+    --max-look-count 1 \
+    --turn-step-deg 20 \
+    --move-step-m 0.25 \
+    --look-step-deg 30 \
+    --steps 150 \
+    --livestream \
+    --public-ip 127.0.0.1
+
+

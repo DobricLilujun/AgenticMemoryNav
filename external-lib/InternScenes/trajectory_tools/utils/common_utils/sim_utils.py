@@ -74,7 +74,7 @@ def init_camera(
 def setup_camera(
     camera: Camera,
     focal_length: float = 18.0,
-    clipping_range_min: float = 0.01,
+    clipping_range_min: float = 0.0001,
     clipping_range_max: float = 1000000.0,
     vertical_aperture: float = 15.2908,
     horizontal_aperture: float = 20.0955,

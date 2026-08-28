@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LingBot-Map — real-time streaming reconstruction</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>LingBot-Map — real-time streaming point cloud</h1>
+    <div id="status">connecting…</div>
+  </header>
+  <main>
+    <section id="video-pane">
+      <h2>Source video</h2>
+      <video id="video" muted playsinline></video>
+    </section>
+    <section id="cloud-pane">
+      <h2>Live 3D reconstruction</h2>
+      <div id="cloud-container"></div>
+    </section>
+  </main>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

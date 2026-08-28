@@ -31,14 +31,6 @@ from typing import Any
 
 import numpy as np
 
-from agentic_memory_nav.common.types import (
-    ActionIntent,
-    CameraIntrinsics,
-    ExecutionFeedback,
-    FrameObservation,
-    Pose3D,
-    Vector3,
-)
 from agentic_memory_nav.agent.execution.discrete_actions import (
     LOOK_PITCH_LIMIT_RAD,
     LOOK_STEP_RAD,
@@ -47,6 +39,14 @@ from agentic_memory_nav.agent.execution.discrete_actions import (
     DiscreteAction,
 )
 from agentic_memory_nav.agent.execution.safety_controller import SafetyController, SafetyError
+from agentic_memory_nav.common.types import (
+    ActionIntent,
+    CameraIntrinsics,
+    ExecutionFeedback,
+    FrameObservation,
+    Pose3D,
+    Vector3,
+)
 
 _SIMULATION_APP: Any | None = None
 
@@ -80,7 +80,7 @@ _OPTICAL_TO_BASE_OFFSET_WXYZ = np.array(
 
 # Camera-link translation in base_link coordinates: (forward, left, up), metres.
 _GO2_BASE_HEIGHT_M = 0.40
-_GO2_CAMERA_OFFSET_M = (-0.20, 0.0, 0.14)
+_GO2_CAMERA_OFFSET_M = (0.25, 0.0, 0.20)
 _GO2_STANDING_HALF_EXTENTS_M = (0.34, 0.20, 0.30)
 _CUBOID_BASE_HEIGHT_M = 0.15
 
@@ -235,7 +235,8 @@ class IsaacSimAdapter:
     def __init__(self, scene: str | None) -> None:
         self.scene = scene
         self.available = importlib.util.find_spec("isaacsim") is not None
-
+        
+        
     # 【方法】未安装则抛错；已安装则提示用 IsaacSimExecutor(需已验证场景与机器人)。
     def start(self) -> None:
         if not self.available:
@@ -293,6 +294,9 @@ class IsaacSimExecutor:
         environment_planes: dict[str, Any] | None = None,
         robot_motion_mode: str = "kinematic",
         light_rig: str = "gray_studio",
+        turn_step_deg: float | None = None,
+        move_step_m: float | None = None,
+        look_step_deg: float | None = None,
     ) -> None:
         if importlib.util.find_spec("isaacsim") is None:
             raise RuntimeError("isaacsim is not importable in this Python environment")
@@ -342,6 +346,15 @@ class IsaacSimExecutor:
         self._head_scan_frames = 0
         # Persistent manual look_up/look_down offset, set via apply_discrete_action.
         self._manual_pitch_offset_rad = 0.0
+        # Per-call overrides for the standard discrete-action step sizes (turn angle,
+        # forward step, look tilt); default to the module-wide standard constants.
+        self._turn_step_rad = (
+            math.radians(turn_step_deg) if turn_step_deg is not None else TURN_STEP_RAD
+        )
+        self._move_step_m = move_step_m if move_step_m is not None else MOVE_STEP_M
+        self._look_step_rad = (
+            math.radians(look_step_deg) if look_step_deg is not None else LOOK_STEP_RAD
+        )
         self._validate_initial_placement = validate_initial_placement
         self._environment_planes = environment_planes or {}
         self._environment_plane_paths: set[str] = set()
@@ -449,6 +462,7 @@ class IsaacSimExecutor:
         )
         self._camera.initialize()
         self._camera.set_focal_length(self._camera_focal_length)
+        self._camera.set_clipping_range(0.1, 20.0)
         self._camera.add_distance_to_image_plane_to_frame()
 
         # camera_offset is already expressed in the robot local frame.
@@ -924,9 +938,9 @@ class IsaacSimExecutor:
 
         if action in (DiscreteAction.LOOK_UP, DiscreteAction.LOOK_DOWN):
             sign = 1.0 if action is DiscreteAction.LOOK_UP else -1.0
+            new_pitch = self._manual_pitch_offset_rad + sign * self._look_step_rad
             self._manual_pitch_offset_rad = max(
-                -LOOK_PITCH_LIMIT_RAD,
-                min(LOOK_PITCH_LIMIT_RAD, self._manual_pitch_offset_rad + sign * LOOK_STEP_RAD),
+                -LOOK_PITCH_LIMIT_RAD, min(LOOK_PITCH_LIMIT_RAD, new_pitch)
             )
             self._stopped = False
             self._world.step(render=False)
@@ -937,7 +951,7 @@ class IsaacSimExecutor:
         if action in (DiscreteAction.TURN_LEFT, DiscreteAction.TURN_RIGHT):
             sign = 1.0 if action is DiscreteAction.TURN_LEFT else -1.0
             position, _ = self._robot.get_world_pose()
-            yaw = self._yaw + sign * TURN_STEP_RAD
+            yaw = self._yaw + sign * self._turn_step_rad
             self._set_robot_pose(position, yaw=yaw)
             self._stopped = False
             self._world.step(render=False)
@@ -948,7 +962,11 @@ class IsaacSimExecutor:
         # move_forward
         position, _ = self._robot.get_world_pose()
         destination = position + np.array(
-            [MOVE_STEP_M * math.cos(self._yaw), MOVE_STEP_M * math.sin(self._yaw), 0.0],
+            [
+                self._move_step_m * math.cos(self._yaw),
+                self._move_step_m * math.sin(self._yaw),
+                0.0,
+            ],
             dtype=np.float32,
         )
         can_move, message = self._can_move_to(destination, self._yaw)
