@@ -44,10 +44,10 @@ execution:
   #   light_rig=gray_studio 用 Isaac Sim 内置 Grey Studio 灯光(中性稳定)。
   # 机器人: Go2 物理版 USD; robot_motion_mode=kinematic 冻结全部腿部关节,
   #   导航只平移/旋转整个 Go2 身体(无步态/关节控制)。
-  scene: /home/snt/projects/AgenticMemoryNav/issacsim-assets/scene0004_00/usd/scene.usd
-  scene_up_axis: y
+  scene: /home/snt/projects/AgenticMemoryNav/issacsim-assets/3rscan_0cac7564-8d6f-2d13-8cb2-8b01c0a1b3d5/scene.usd
+  scene_up_axis: z
   light_rig: gray_studio
-  robot_usd: /home/snt/Desktop/Go2/configuration/go2_description_physics.usd
+  robot_usd: /home/snt/projects/AgenticMemoryNav/issacsim-assets/Go2/configuration/go2_description_physics.usd
   robot_motion_mode: kinematic
 
   # ---------------------------------------------------------------------------
@@ -62,30 +62,15 @@ execution:
   # validate_initial_placement=true: 若智能体循环开始前 Go2 站立体积与场景碰撞体
   #   相交, 则直接拒绝初始化(抛错), 避免机器人一开始就嵌进墙/地板。
   robot_start:
-    position: [1.73, 2.22, 0.35]
-    yaw_deg: -135.0
-  validate_initial_placement: false
+    position: [2.811, -3.954, 0.35]
+    yaw_deg: 0.0
+  validate_initial_placement: true
 
   # ---------------------------------------------------------------------------
-  # 环境平面: 地面/天花板的尺寸与中心由“已加载场景 USD 的世界包围盒”推导。
-  #   各字段: enabled 是否启用 / prim_path USD 路径 / margin_m 四周外扩 /
-  #   z_offset_m 相对面高度的偏移 / color 颜色 / collision_enabled 是否作 PhysX 碰撞体。
+  # 环境平面: 3rscan 场景已自带地面/天花板，不需要再额外生成默认平面；
+  #   否则会与场景原有几何重复重叠，导致触碰体/初始化不稳定。
   # ---------------------------------------------------------------------------
-  environment_planes:
-    ground:
-      enabled: true
-      prim_path: /World/GroundPlane
-      margin_m: 0.5
-      z_offset_m: -0.02
-      color: [0.18, 0.20, 0.22]
-      collision_enabled: true
-    ceiling:
-      enabled: true
-      prim_path: /World/CeilingPlane
-      margin_m: 0.5
-      z_offset_m: 0.02
-      color: [0.82, 0.84, 0.88]
-      collision_enabled: true
+  environment_planes: {}
 
   # ---------------------------------------------------------------------------
   # 相机 / 流媒体
@@ -96,7 +81,7 @@ execution:
   # head_scan_*: 头镜头在身体偏航之外的小幅周期扫视; 0=静止, 仅触发后才按正弦扰动。
   #   head_scan_period_frames 为扫视完整周期(帧)。
   # bind_viewport_to_camera=true: WebRTC 视口指向头相机(而非默认 persp 相机)。
-  go2_camera_orient: [90.0, 0.0, 0.0]
+  go2_camera_orient: [0.0, 0.0, 0.0]
   keep_streaming: true
   head_scan_yaw_deg: 0.0
   head_scan_pitch_deg: 0.0

@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Render the configured Isaac Sim scene under the standard 6-action discrete control set.
+"""Render the configured Isaac Sim scene under the expanded discrete control set.
 
-Each loop step blocks for exactly one input, resolves it to one of the six standard
+Each loop step blocks for exactly one input, resolves it to one of the standard
 actions, and executes it once via ``IsaacSimExecutor.apply_discrete_action``:
 
-  0 / a / Left  : turn_left   (rotate left 15 deg)
-  1 / d / Right : turn_right  (rotate right 15 deg)
-  2 / w         : move_forward (advance 0.25 m)
+  0 / a / Left  : turn_left        (rotate left 15 deg)
+  1 / d / Right : turn_right       (rotate right 15 deg)
+  2 / w         : move_forward     (advance 0.25 m)
   3 / space / s : stop
-  4 / Up        : look_up    (tilt camera up 30 deg, clamped to +-60 deg)
-  5 / Down      : look_down  (tilt camera down 30 deg, clamped to +-60 deg)
-  p / q         : quit
+  4 / Up        : look_up          (tilt camera up 30 deg, clamped to +-60 deg)
+  5 / Down      : look_down        (tilt camera down 30 deg, clamped to +-60 deg)
+  6 / q         : turn_left_big    (rotate left 90 deg)
+  7 / e         : turn_right_big   (rotate right 90 deg)
+  8 / x         : move_backward    (retreat 0.25 m)
+  p             : quit
 
 Run with Isaac Sim's Python:
     ~/isaacsim/python.sh scripts/preview_isaacsim_navigation_actions.py \
@@ -31,18 +34,18 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agentic_memory_nav.common.config import load_config  # noqa: E402
-from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun  # noqa: E402
 from agentic_memory_nav.agent.execution.discrete_actions import (  # noqa: E402
     ACTION_BY_ID,
     DiscreteAction,
 )
 from agentic_memory_nav.agent.execution.isaacsim_adapter import IsaacSimExecutor  # noqa: E402
 from agentic_memory_nav.agent.execution.safety_controller import SafetyController  # noqa: E402
+from agentic_memory_nav.common.config import load_config  # noqa: E402
+from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun  # noqa: E402
 
-_QUIT_KEYS = {"p", "q"}
+_QUIT_KEYS = {"p"}
 
-# Single-keypress aliases on top of the numeric ids (0-5) in ACTION_BY_ID.
+# Single-keypress aliases on top of the numeric ids (0-8) in ACTION_BY_ID.
 _KEY_ALIASES: dict[str, DiscreteAction] = {
     "a": DiscreteAction.TURN_LEFT,
     "d": DiscreteAction.TURN_RIGHT,
@@ -53,6 +56,9 @@ _KEY_ALIASES: dict[str, DiscreteAction] = {
     "down": DiscreteAction.LOOK_DOWN,
     "left": DiscreteAction.TURN_LEFT,
     "right": DiscreteAction.TURN_RIGHT,
+    "q": DiscreteAction.TURN_LEFT_BIG,
+    "e": DiscreteAction.TURN_RIGHT_BIG,
+    "x": DiscreteAction.MOVE_BACKWARD,
 }
 
 
@@ -81,14 +87,18 @@ def _as_vector3(value: object, name: str) -> tuple[float, float, float] | None:
     if value is None:
         return None
     if not isinstance(value, (list, tuple, np.ndarray)):
-        raise ValueError(f"{name} must be a sequence of 3 numbers, got {type(value).__name__}: {value!r}")
+        raise ValueError(
+            f"{name} must be a sequence of 3 numbers, got {type(value).__name__}: {value!r}"
+        )
     vector = tuple(float(item) for item in value)
     if len(vector) != 3:
         raise ValueError(f"{name} must contain exactly 3 values, got {vector!r}")
     return vector
 
 
-def _parse_robot_start_pose(value: object, name: str) -> tuple[tuple[float, float, float] | None, float]:
+def _parse_robot_start_pose(
+    value: object, name: str
+) -> tuple[tuple[float, float, float] | None, float]:
     if value is None:
         return None, 0.0
     if isinstance(value, dict):
@@ -108,8 +118,12 @@ def _parse_robot_start_pose(value: object, name: str) -> tuple[tuple[float, floa
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--config", default=str(ROOT / "configs/isaacsim_realtime_agent_internscenes.yaml"))
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--config", default=str(ROOT / "configs/isaacsim_realtime_agent_internscenes.yaml")
+    )
     parser.add_argument("--livestream", action="store_true")
     parser.add_argument("--public-ip", default="127.0.0.1")
     return parser.parse_args()
@@ -119,7 +133,9 @@ def main() -> int:
     args = parse_args()
     config = load_config(args.config)
     execution = config.section("execution")
-    robot_start, robot_yaw_deg = _parse_robot_start_pose(execution.get("robot_start"), "robot_start")
+    robot_start, robot_yaw_deg = _parse_robot_start_pose(
+        execution.get("robot_start"), "robot_start"
+    )
     camera_fps = int(execution.get("camera_fps", 30))
     if not 30 <= camera_fps <= 60:
         raise ValueError(f"execution.camera_fps must be between 30 and 60, got {camera_fps}")
@@ -134,7 +150,9 @@ def main() -> int:
         ]
         print(f"Livestream: WebRTC signal at {args.public_ip}:49100 (stream port 47998)")
 
-    run = ExperimentRun(ROOT / str(config.section("runtime").get("output_root", "outputs")), config.raw)
+    run = ExperimentRun(
+        ROOT / str(config.section("runtime").get("output_root", "outputs")), config.raw
+    )
     head_dir = run.artifacts / "head_rgb"
     head_dir.mkdir(exist_ok=True)
     safety = SafetyController(
@@ -146,10 +164,16 @@ def main() -> int:
         scene=execution.get("scene"),
         safety=safety,
         max_speed=float(execution.get("max_speed", 0.5)),
-        camera_resolution=(int(execution.get("camera_height", 192)), int(execution.get("camera_width", 256))),
+        camera_resolution=(
+            int(execution.get("camera_height", 192)),
+            int(execution.get("camera_width", 256)),
+        ),
         headless=bool(execution.get("headless", True)),
         livestream_args=livestream_args,
-        window_resolution=(int(execution.get("stream_width", 1280)), int(execution.get("stream_height", 720))),
+        window_resolution=(
+            int(execution.get("stream_width", 1280)),
+            int(execution.get("stream_height", 720)),
+        ),
         robot_usd=execution.get("robot_usd"),
         bind_viewport_to_camera=bool(execution.get("bind_viewport_to_camera", False)),
         scene_up_axis=str(execution.get("scene_up_axis", "z")),

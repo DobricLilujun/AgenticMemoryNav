@@ -48,21 +48,24 @@ make install
 ## Standard Action Space
 
 Both `UnitreeSimExecutor` (mock backend) and `IsaacSimExecutor` implement the same
-6-action discrete control set via `apply_discrete_action()`
+expanded discrete control set via `apply_discrete_action()`
 (`src/agentic_memory_nav/agent/execution/discrete_actions.py`):
 
-| ID | Action         | Effect                                              |
-|----|----------------|------------------------------------------------------|
-| 0  | `turn_left`    | rotate left 15° (0.262 rad)                         |
-| 1  | `turn_right`   | rotate right 15° (0.262 rad)                        |
-| 2  | `move_forward` | move forward 0.25 m along the current heading       |
-| 3  | `stop`         | stop and declare task completion                    |
-| 4  | `look_up`      | tilt camera up 30° (0.524 rad), clamped to ±60°     |
-| 5  | `look_down`    | tilt camera down 30° (0.524 rad), clamped to ±60°   |
+| ID | Action            | Effect                                              |
+|----|-------------------|------------------------------------------------------|
+| 0  | `turn_left`       | rotate left 15° (0.262 rad)                         |
+| 1  | `turn_right`      | rotate right 15° (0.262 rad)                        |
+| 2  | `move_forward`    | move forward 0.25 m along the current heading       |
+| 3  | `stop`            | stop and declare task completion                    |
+| 4  | `look_up`         | tilt camera up 30° (0.524 rad), clamped to ±60°     |
+| 5  | `look_down`       | tilt camera down 30° (0.524 rad), clamped to ±60°   |
+| 6  | `turn_left_big`   | rotate left 90° (1.571 rad)                         |
+| 7  | `turn_right_big`  | rotate right 90° (1.571 rad)                        |
+| 8  | `move_backward`   | move backward 0.25 m along the current heading      |
 
 `IsaacSimExecutor.apply_discrete_action` reuses the existing collision predicate for
-`move_forward` and fails closed (reports a collision, does not move) if the step would
-intersect the environment. This is additive: `send_velocity_command` and
+`move_forward` and `move_backward` and fails closed (reports a collision, does not move)
+if the step would intersect the environment. This is additive: `send_velocity_command` and
 `send_waypoint` are unchanged and still used by the planner-driven pipeline and the
 other Isaac Sim preview scripts below.
 
@@ -260,3 +263,4 @@ conda deactivate
     --public-ip 127.0.0.1
 
 
+~/isaacsim/python.sh scripts/preview_isaacsim_navigation_vlm_discrete.py     --config configs/isaacsim_realtime_agent_internscenes_test.yaml    --livestream     --public-ip 127.0.0.1     --steps 100     --turn-step-deg 15.0     --move-step-m 0.20

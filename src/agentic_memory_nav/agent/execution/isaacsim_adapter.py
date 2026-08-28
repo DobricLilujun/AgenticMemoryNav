@@ -35,6 +35,7 @@ from agentic_memory_nav.agent.execution.discrete_actions import (
     LOOK_PITCH_LIMIT_RAD,
     LOOK_STEP_RAD,
     MOVE_STEP_M,
+    TURN_BIG_STEP_RAD,
     TURN_STEP_RAD,
     DiscreteAction,
 )
@@ -74,9 +75,7 @@ _SIMULATION_APP: Any | None = None
 #   (forward=前向, left=左向, up=上) = (0.42, 0.0, 0.14) m。
 #   前向 0.42m 让镜头在 Go2 机头前方、左向 0、上向 0.14m 抬高避免被机头遮挡。
 
-_OPTICAL_TO_BASE_OFFSET_WXYZ = np.array(
-    [1.0, 0.0, 0.0, 0.0], dtype=np.float32
-)
+_OPTICAL_TO_BASE_OFFSET_WXYZ = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
 # Camera-link translation in base_link coordinates: (forward, left, up), metres.
 _GO2_BASE_HEIGHT_M = 0.40
@@ -90,6 +89,7 @@ def _normalize_quat_wxyz(quaternion: np.ndarray) -> np.ndarray:
     if norm < 1e-8:
         raise ValueError("Quaternion norm must be non-zero")
     return quaternion / norm
+
 
 # 【函数】偏航角 → WXYZ 四元数（绕世界 +Z 轴旋转）。
 # 【原因】导航偏航 yaw 定义为绕 +Z 轴；cos/sin 半角构成四元数。
@@ -235,8 +235,7 @@ class IsaacSimAdapter:
     def __init__(self, scene: str | None) -> None:
         self.scene = scene
         self.available = importlib.util.find_spec("isaacsim") is not None
-        
-        
+
     # 【方法】未安装则抛错；已安装则提示用 IsaacSimExecutor(需已验证场景与机器人)。
     def start(self) -> None:
         if not self.available:
@@ -295,6 +294,7 @@ class IsaacSimExecutor:
         robot_motion_mode: str = "kinematic",
         light_rig: str = "gray_studio",
         turn_step_deg: float | None = None,
+        turn_big_step_deg: float | None = None,
         move_step_m: float | None = None,
         look_step_deg: float | None = None,
     ) -> None:
@@ -326,9 +326,7 @@ class IsaacSimExecutor:
         if not 30 <= camera_fps <= 60:
             raise ValueError(f"camera_fps must be between 30 and 60, got {camera_fps}")
         if camera_focal_length <= 0.0:
-            raise ValueError(
-                f"camera_focal_length must be positive, got {camera_focal_length}"
-            )
+            raise ValueError(f"camera_focal_length must be positive, got {camera_focal_length}")
         if robot_motion_mode != "kinematic":
             raise ValueError(
                 "Only robot_motion_mode='kinematic' is supported until a Go2 gait controller is added"
@@ -350,6 +348,9 @@ class IsaacSimExecutor:
         # forward step, look tilt); default to the module-wide standard constants.
         self._turn_step_rad = (
             math.radians(turn_step_deg) if turn_step_deg is not None else TURN_STEP_RAD
+        )
+        self._turn_big_step_rad = (
+            math.radians(turn_big_step_deg) if turn_big_step_deg is not None else TURN_BIG_STEP_RAD
         )
         self._move_step_m = move_step_m if move_step_m is not None else MOVE_STEP_M
         self._look_step_rad = (
@@ -484,7 +485,6 @@ class IsaacSimExecutor:
             orientation=self._camera_base_orientation_wxyz,
         )
 
-
         # Fail early if a version/API change creates the camera outside the intended robot Xform.
         camera_prim = self._world.stage.GetPrimAtPath(self._head_camera_path)
         if not camera_prim.IsValid():
@@ -529,18 +529,30 @@ class IsaacSimExecutor:
     #        加 90° 旋转(0.707,0.707,0,0)，把 Y-up 场景转成 Z-up；否则直接打开。
     # 【原因】Isaac Sim 要求 Z-up；包装层保留 /World 恒等变换(场景对齐放在 /World/scene)。
     def _open_scene_stage(self, scene: str, up_axis: str) -> None:
-        """Open the environment through SimulationApp's USD context before World setup."""
+        """Open the environment through SimulationApp's USD context before World setup.
+
+        Some authored USD scenes already carry a root transform or a custom
+        hierarchy; forcing every scene into a strict /World identity assumption is
+        brittle and breaks legitimate authored scenes. Instead, we wrap the asset
+        under a neutral /World/scene and only apply a Y-up rotation when the
+        caller explicitly requests it.
+        """
         scene_to_open = scene
-        if up_axis.lower() == "y":
-            wrapper = Path(tempfile.gettempdir()) / f"agentic_memory_nav_{Path(scene).stem}_zup.usda"
-            wrapper.write_text(
-                "#usda 1.0\n(\n    defaultPrim = \"World\"\n    upAxis = \"Z\"\n)\n\n"
-                "def Xform \"World\"\n{\n"
-                f"    def Xform \"scene\" (\n        prepend references = @{scene}@</World>\n    )\n"
-                "    {\n        quatd xformOp:orient = (0.70710678, 0.70710678, 0, 0)\n"
-                "        uniform token[] xformOpOrder = [\"xformOp:orient\"]\n    }\n}\n"
+        wrapper = Path(tempfile.gettempdir()) / f"agentic_memory_nav_{Path(scene).stem}_wrapped.usda"
+        wrapper.write_text(
+            '#usda 1.0\n(\n    defaultPrim = "World"\n    upAxis = "Z"\n)\n\n'
+            'def Xform "World"\n{\n'
+            f'    def Xform "scene" (\n        prepend references = @{scene}@</World>\n    )\n'
+            "    {\n"
+            + (
+                '        quatd xformOp:orient = (0.70710678, 0.70710678, 0, 0)\n'
+                '        uniform token[] xformOpOrder = ["xformOp:orient"]\n'
+                if up_axis.lower() == "y"
+                else ""
             )
-            scene_to_open = str(wrapper)
+            + "    }\n}\n"
+        )
+        scene_to_open = str(wrapper)
 
         context = self._simulation_app.context
         if not context.open_stage(scene_to_open):
@@ -548,14 +560,12 @@ class IsaacSimExecutor:
         while context.get_stage_loading_status()[2] > 0:
             self._simulation_app.update()
 
-    # 【方法】校验 /World 必须为恒等变换(无 xformOp)。
-    # 【原因】场景对齐应放在 /World/scene 下；/World 若被变换会破坏坐标一致性。
+    # 【方法】允许作者化 USD 根上带有原生变换；我们只需要保证场景可访问，
+    #        不强制要求 /World 必须是零 xformOps。
     def _assert_world_identity(self) -> None:
-        from pxr import UsdGeom  # type: ignore[import-not-found]
-
         world = self._simulation_app.context.get_stage().GetPrimAtPath("/World")
-        if not world.IsValid() or UsdGeom.Xformable(world).GetOrderedXformOps():
-            raise RuntimeError("/World must have identity transform; put scene alignment under /World/scene")
+        if not world.IsValid():
+            raise RuntimeError("Scene did not produce a /World root")
 
     # 【方法】应用 Isaac Sim 内置 Grey Studio 灯光 rig(经视口灯光 API)。
     # 【原因】真实场景需要稳定照明；解析 lighting 扩展路径找到 Grey_Studio.usda 并启用，
@@ -572,7 +582,9 @@ class IsaacSimExecutor:
         import omni.kit.viewport.menubar.lighting as lighting  # type: ignore[import-not-found]
 
         if lighting.__file__ is None:
-            raise RuntimeError("Isaac Sim lighting module has no __file__; cannot resolve Grey Studio asset")
+            raise RuntimeError(
+                "Isaac Sim lighting module has no __file__; cannot resolve Grey Studio asset"
+            )
         rig_directory = Path(lighting.__file__).resolve().parents[5] / "data/usd"
         if not (rig_directory / "Grey_Studio.usda").is_file():
             raise RuntimeError(f"Isaac Sim built-in Grey Studio asset is missing: {rig_directory}")
@@ -583,9 +595,7 @@ class IsaacSimExecutor:
             _set_lighting_mode,
         )
 
-        success, _, _ = _set_lighting_mode(
-            "Grey Studio", usd_context=self._simulation_app.context
-        )
+        success, _, _ = _set_lighting_mode("Grey Studio", usd_context=self._simulation_app.context)
         if not success:
             raise RuntimeError("Isaac Sim failed to apply built-in Grey_Studio light rig")
 
@@ -596,13 +606,23 @@ class IsaacSimExecutor:
 
         scene = self._world.stage.GetPrimAtPath("/World/scene")
         if not scene.IsValid():
-            raise RuntimeError("Opened scene does not define /World/scene")
+            scene = self._world.stage.GetPrimAtPath("/World")
+        if not scene.IsValid():
+            raise RuntimeError("Opened scene does not define a usable /World or /World/scene root")
         bounds = UsdGeom.BBoxCache(0, [UsdGeom.Tokens.default_]).ComputeWorldBound(scene)
         aligned = bounds.ComputeAlignedRange()
-        return np.array(aligned.GetMin(), dtype=np.float32), np.array(aligned.GetMax(), dtype=np.float32)
+        return np.array(aligned.GetMin(), dtype=np.float32), np.array(
+            aligned.GetMax(), dtype=np.float32
+        )
 
     # 【方法】按配置添加地面/天花板静态平面(默认颜色+包围盒范围)。
     def _add_environment_planes(self, config: dict[str, Any]) -> None:
+        # An explicit empty config means "this scene already has its own authored
+        # ground/ceiling geometry". Creating default planes here for a prebuilt USD
+        # asset causes duplicate static colliders and can trip PhysX with invalid
+        # broad-phase bounds.
+        if not config:
+            return
         lower, upper = self._environment_bounds
         for name, z, default_color in (
             ("ground", float(lower[2]), (0.18, 0.20, 0.22)),
@@ -633,16 +653,31 @@ class IsaacSimExecutor:
         if len(color) != 3:
             raise ValueError(f"environment_planes.{name}.color must have 3 values")
         path = str(config.get("prim_path", f"/World/{name}_plane"))
+
+        lower_f = np.asarray(lower, dtype=np.float64)
+        upper_f = np.asarray(upper, dtype=np.float64)
+        if not np.all(np.isfinite(lower_f)) or not np.all(np.isfinite(upper_f)):
+            raise ValueError(f"environment_planes.{name} has non-finite bounds: lower={lower!r}, upper={upper!r}")
+
         position = np.array(
             [
-                (float(lower[0]) + float(upper[0])) / 2.0,
-                (float(lower[1]) + float(upper[1])) / 2.0,
-                z + float(config.get("z_offset_m", 0.0)),
+                (float(lower_f[0]) + float(upper_f[0])) / 2.0,
+                (float(lower_f[1]) + float(upper_f[1])) / 2.0,
+                float(z) + float(config.get("z_offset_m", 0.0)),
             ],
-            dtype=np.float32,
+            dtype=np.float64,
         )
-        width = float(upper[0] - lower[0]) + 2.0 * margin
-        length = float(upper[1] - lower[1]) + 2.0 * margin
+        if not np.all(np.isfinite(position)):
+            raise ValueError(f"environment_planes.{name} has non-finite plane position: {position!r}")
+
+        width = float(upper_f[0] - lower_f[0]) + 2.0 * margin
+        length = float(upper_f[1] - lower_f[1]) + 2.0 * margin
+        if not math.isfinite(width) or not math.isfinite(length) or width <= 0.0 or length <= 0.0:
+            raise ValueError(
+                f"environment_planes.{name} generated invalid plane dimensions: "
+                f"width={width}, length={length}, lower={lower!r}, upper={upper!r}"
+            )
+
         plane = UsdGeom.Plane.Define(self._world.stage, path)
         plane.CreateAxisAttr("Z")
         plane.CreateDoubleSidedAttr(True)
@@ -681,8 +716,7 @@ class IsaacSimExecutor:
         hits = self._environment_overlap_hits(position, self._yaw)
         if hits:
             raise RuntimeError(
-                "Go2 initial placement overlaps environment colliders: "
-                + ", ".join(hits[:5])
+                "Go2 initial placement overlaps environment colliders: " + ", ".join(hits[:5])
             )
 
     # 【方法】用 PhysX overlap_box 查询机器人站立盒与环境的碰撞命中。
@@ -696,7 +730,10 @@ class IsaacSimExecutor:
 
         def report_overlap(hit: Any) -> bool:
             collider = str(hit.rigid_body)
-            if not collider.startswith("/World/robot") and collider not in self._environment_plane_paths:
+            if (
+                not collider.startswith("/World/robot")
+                and collider not in self._environment_plane_paths
+            ):
                 hits.append(collider)
             return True
 
@@ -748,9 +785,7 @@ class IsaacSimExecutor:
     def _set_robot_pose(self, position_usd: np.ndarray, yaw: float | None = None) -> None:
         if yaw is not None:
             self._yaw = yaw
-        self._robot.set_world_pose(
-            position=position_usd, orientation=_yaw_to_quat_wxyz(self._yaw)
-        )
+        self._robot.set_world_pose(position=position_usd, orientation=_yaw_to_quat_wxyz(self._yaw))
 
     # 【方法】arm 一个有界 head 扫视窗口；在此之前镜头静止朝正前方。
     # 【原因】默认静止；仅当真正需要(如场景图新增物体)才调用，扫视窗口到期后恢复静止。
@@ -832,9 +867,7 @@ class IsaacSimExecutor:
         self._frame_index = 0
         self._collision = False
         self._stopped = True
-        self._set_robot_pose(
-            self._initial_robot_position_usd, yaw=self._initial_robot_yaw_rad
-        )
+        self._set_robot_pose(self._initial_robot_position_usd, yaw=self._initial_robot_yaw_rad)
         self._world.reset()
 
     # 【方法】返回机器人当前位姿(经坐标重映射)。
@@ -869,16 +902,13 @@ class IsaacSimExecutor:
             timestamp=float(self._frame_index),
             rgb=rgb,
             depth=depth,
-            camera_intrinsics=CameraIntrinsics(
-                80.0, 80.0, width / 2, height / 2, width, height
-            ),
+            camera_intrinsics=CameraIntrinsics(80.0, 80.0, width / 2, height / 2, width, height),
             camera_pose=robot_pose,
             robot_pose=robot_pose,
             provenance=["isaacsim"],
         )
         self._frame_index += 1
         return frame
-
 
     # 【方法】速度指令。
     # 【流程】① 速度/角速度超限→急停；② 把局部速度(vx,vy)旋转到世界系(按 yaw 旋转)；
@@ -895,22 +925,24 @@ class IsaacSimExecutor:
             )
 
         position, _ = self._robot.get_world_pose()
-        
+
         # 将局部速度旋转到世界坐标系
         cos_yaw = math.cos(self._yaw)
         sin_yaw = math.sin(self._yaw)
         vx_world = vx * cos_yaw - vy * sin_yaw
         vy_world = vx * sin_yaw + vy * cos_yaw
-        
-        destination = position + np.array([vx_world * self.dt, vy_world * self.dt, 0.0], dtype=np.float32)
+
+        destination = position + np.array(
+            [vx_world * self.dt, vy_world * self.dt, 0.0], dtype=np.float32
+        )
         yaw = self._yaw + wz * self.dt
-        
+
         can_move, message = self._can_move_to(destination, yaw)
         if not can_move:
             self.stop()
             self._collision = True
             return ExecutionFeedback("velocity", False, self.get_state(), True, 0.0, message)
-        
+
         self._set_robot_pose(destination, yaw=yaw)
         self._stopped = False
         self._world.step(render=False)
@@ -945,40 +977,74 @@ class IsaacSimExecutor:
             self._stopped = False
             self._world.step(render=False)
             return ExecutionFeedback(
-                action.value, True, self.get_state(), self._collision, time.perf_counter() - started, "executed"
+                action.value,
+                True,
+                self.get_state(),
+                self._collision,
+                time.perf_counter() - started,
+                "executed",
             )
 
-        if action in (DiscreteAction.TURN_LEFT, DiscreteAction.TURN_RIGHT):
-            sign = 1.0 if action is DiscreteAction.TURN_LEFT else -1.0
+        if action in (
+            DiscreteAction.TURN_LEFT,
+            DiscreteAction.TURN_RIGHT,
+            DiscreteAction.TURN_LEFT_BIG,
+            DiscreteAction.TURN_RIGHT_BIG,
+        ):
+            sign = (
+                1.0 if action in (DiscreteAction.TURN_LEFT, DiscreteAction.TURN_LEFT_BIG) else -1.0
+            )
+            step_rad = (
+                self._turn_big_step_rad
+                if action in (DiscreteAction.TURN_LEFT_BIG, DiscreteAction.TURN_RIGHT_BIG)
+                else self._turn_step_rad
+            )
             position, _ = self._robot.get_world_pose()
-            yaw = self._yaw + sign * self._turn_step_rad
+            yaw = self._yaw + sign * step_rad
             self._set_robot_pose(position, yaw=yaw)
             self._stopped = False
             self._world.step(render=False)
             return ExecutionFeedback(
-                action.value, True, self.get_state(), self._collision, time.perf_counter() - started, "executed"
+                action.value,
+                True,
+                self.get_state(),
+                self._collision,
+                time.perf_counter() - started,
+                "executed",
             )
 
-        # move_forward
-        position, _ = self._robot.get_world_pose()
-        destination = position + np.array(
-            [
-                self._move_step_m * math.cos(self._yaw),
-                self._move_step_m * math.sin(self._yaw),
-                0.0,
-            ],
-            dtype=np.float32,
-        )
-        can_move, message = self._can_move_to(destination, self._yaw)
-        if not can_move:
-            self.stop()
-            self._collision = True
-            return ExecutionFeedback(action.value, False, self.get_state(), True, 0.0, message)
-        self._set_robot_pose(destination, yaw=self._yaw)
-        self._stopped = False
-        self._world.step(render=False)
+        if action in (DiscreteAction.MOVE_FORWARD, DiscreteAction.MOVE_BACKWARD):
+            sign = 1.0 if action is DiscreteAction.MOVE_FORWARD else -1.0
+            position, _ = self._robot.get_world_pose()
+            destination = position + np.array(
+                [
+                    sign * self._move_step_m * math.cos(self._yaw),
+                    sign * self._move_step_m * math.sin(self._yaw),
+                    0.0,
+                ],
+                dtype=np.float32,
+            )
+            can_move, message = self._can_move_to(destination, self._yaw)
+            if not can_move:
+                self.stop()
+                self._collision = True
+                return ExecutionFeedback(action.value, False, self.get_state(), True, 0.0, message)
+            self._set_robot_pose(destination, yaw=self._yaw)
+            self._stopped = False
+            self._world.step(render=False)
+            return ExecutionFeedback(
+                action.value,
+                True,
+                self.get_state(),
+                self._collision,
+                time.perf_counter() - started,
+                "executed",
+            )
+
+        # Unreachable: all valid actions are handled above.
+        self.stop()
         return ExecutionFeedback(
-            action.value, True, self.get_state(), self._collision, time.perf_counter() - started, "executed"
+            action.value, False, self.get_state(), self._collision, 0.0, "unknown action"
         )
 
     # 【方法】航点指令。

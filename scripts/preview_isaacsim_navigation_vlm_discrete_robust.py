@@ -28,6 +28,7 @@ The default instruction is "Find the green shoe in the room".
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -66,6 +67,28 @@ def _parse_robot_start_pose(
             return (sequence[0], sequence[1], sequence[2]), float(sequence[3])
         raise ValueError(f"{name} must contain 3 or 4 values [x, y, z[, yaw_deg]]")
     raise ValueError(f"{name} must be a position or a mapping")
+
+
+def _load_scene_go2_placement(scene_path: str | Path) -> tuple[tuple[float, float, float] | None, float]:
+    scene_file = Path(scene_path).expanduser()
+    if not scene_file.exists():
+        return None, 0.0
+    json_path = scene_file.with_suffix(".json")
+    if not json_path.exists():
+        return None, 0.0
+    try:
+        payload = json.loads(json_path.read_text())
+    except Exception:
+        return None, 0.0
+    placement = payload.get("go2_placement") or {}
+    if not placement.get("valid", False):
+        return None, 0.0
+    pos = placement.get("position_m") or {}
+    x = pos.get("x")
+    y = pos.get("y")
+    if x is None or y is None:
+        return None, 0.0
+    return (float(x), float(y), 0.35), 0.0
 
 
 def _as_vector3(value: object, name: str) -> tuple[float, float, float] | None:
@@ -141,9 +164,14 @@ def main() -> int:
     args = parse_args()
     config = load_config(args.config)
     execution = config.section("execution")
+    scene_path = execution.get("scene")
     robot_start, robot_yaw_deg = _parse_robot_start_pose(
         execution.get("robot_start"), "robot_start"
     )
+    if robot_start is None and scene_path:
+        robot_start_from_scene, scene_yaw_deg = _load_scene_go2_placement(scene_path)
+        if robot_start_from_scene is not None:
+            robot_start, robot_yaw_deg = robot_start_from_scene, scene_yaw_deg
     camera_fps = int(execution.get("camera_fps", 30))
     if not 30 <= camera_fps <= 60:
         raise ValueError(f"execution.camera_fps must be between 30 and 60, got {camera_fps}")
@@ -167,6 +195,18 @@ def main() -> int:
     )
     head_dir = run.artifacts / "head_rgb"
     head_dir.mkdir(exist_ok=True)
+
+    environment_planes = dict(execution.get("environment_planes", {}))
+    scene_path = execution.get("scene")
+    if scene_path and Path(scene_path).expanduser().with_suffix(".json").exists():
+        scene_json = Path(scene_path).expanduser().with_suffix(".json")
+        try:
+            payload = json.loads(scene_json.read_text())
+            placement = payload.get("go2_placement") or {}
+            if placement.get("valid", False):
+                environment_planes = {}
+        except Exception:
+            environment_planes = environment_planes
 
     safety = SafetyController(
         max_speed=float(execution.get("max_speed", 0.35)),
@@ -199,7 +239,7 @@ def main() -> int:
         initial_robot_yaw_deg=robot_yaw_deg,
         camera_fps=camera_fps,
         camera_focal_length=float(execution.get("camera_focal_length", 12.0)),
-        environment_planes=dict(execution.get("environment_planes", {})),
+        environment_planes=environment_planes,
         robot_motion_mode=str(execution.get("robot_motion_mode", "kinematic")),
         light_rig=str(execution.get("light_rig", "gray_studio")),
         turn_step_deg=args.turn_step_deg,

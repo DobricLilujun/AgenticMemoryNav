@@ -11,6 +11,15 @@ import time
 
 import numpy as np
 
+from agentic_memory_nav.agent.execution.discrete_actions import (
+    LOOK_PITCH_LIMIT_RAD,
+    LOOK_STEP_RAD,
+    MOVE_STEP_M,
+    TURN_BIG_STEP_RAD,
+    TURN_STEP_RAD,
+    DiscreteAction,
+)
+from agentic_memory_nav.agent.execution.safety_controller import SafetyController, SafetyError
 from agentic_memory_nav.common.types import (
     ActionIntent,
     CameraIntrinsics,
@@ -19,14 +28,6 @@ from agentic_memory_nav.common.types import (
     Pose3D,
     Vector3,
 )
-from agentic_memory_nav.agent.execution.discrete_actions import (
-    LOOK_PITCH_LIMIT_RAD,
-    LOOK_STEP_RAD,
-    MOVE_STEP_M,
-    TURN_STEP_RAD,
-    DiscreteAction,
-)
-from agentic_memory_nav.agent.execution.safety_controller import SafetyController, SafetyError
 
 
 # 【类】平面 Unitree 执行器（RobotBackend 实现）。
@@ -102,15 +103,18 @@ class UnitreeSimExecutor:
             "velocity", True, self._state, False, time.perf_counter() - started, "executed"
         )
 
-    # 【方法】标准 6-action 离散指令；语义与 IsaacSimExecutor.apply_discrete_action 一致。
-    # 【原因】本执行器无碰撞体，move_forward 无碰撞预检，仅按当前 yaw 前移。
+        # 【方法】标准 9-action 离散指令；语义与 IsaacSimExecutor.apply_discrete_action 一致。
+
+    # 【原因】本执行器无碰撞体，move_* 无碰撞预检，仅按当前 yaw 前移/后移。
     def apply_discrete_action(self, action: DiscreteAction | str) -> ExecutionFeedback:
         started = time.perf_counter()
         action = DiscreteAction(action)
 
         if action is DiscreteAction.STOP:
             self.stop()
-            return ExecutionFeedback(action.value, True, self._state, self._collision, 0.0, "stopped")
+            return ExecutionFeedback(
+                action.value, True, self._state, self._collision, 0.0, "stopped"
+            )
 
         if action in (DiscreteAction.LOOK_UP, DiscreteAction.LOOK_DOWN):
             sign = 1.0 if action is DiscreteAction.LOOK_UP else -1.0
@@ -120,30 +124,66 @@ class UnitreeSimExecutor:
             )
             self._stopped = False
             return ExecutionFeedback(
-                action.value, True, self._state, self._collision, time.perf_counter() - started, "executed"
+                action.value,
+                True,
+                self._state,
+                self._collision,
+                time.perf_counter() - started,
+                "executed",
             )
 
-        if action in (DiscreteAction.TURN_LEFT, DiscreteAction.TURN_RIGHT):
-            sign = 1.0 if action is DiscreteAction.TURN_LEFT else -1.0
-            self._state = Pose3D(position=self._state.position, yaw=self._state.yaw + sign * TURN_STEP_RAD)
+        if action in (
+            DiscreteAction.TURN_LEFT,
+            DiscreteAction.TURN_RIGHT,
+            DiscreteAction.TURN_LEFT_BIG,
+            DiscreteAction.TURN_RIGHT_BIG,
+        ):
+            sign = (
+                1.0 if action in (DiscreteAction.TURN_LEFT, DiscreteAction.TURN_LEFT_BIG) else -1.0
+            )
+            step_rad = (
+                TURN_BIG_STEP_RAD
+                if action in (DiscreteAction.TURN_LEFT_BIG, DiscreteAction.TURN_RIGHT_BIG)
+                else TURN_STEP_RAD
+            )
+            self._state = Pose3D(
+                position=self._state.position, yaw=self._state.yaw + sign * step_rad
+            )
             self._stopped = False
             return ExecutionFeedback(
-                action.value, True, self._state, self._collision, time.perf_counter() - started, "executed"
+                action.value,
+                True,
+                self._state,
+                self._collision,
+                time.perf_counter() - started,
+                "executed",
             )
 
-        # move_forward
-        yaw = self._state.yaw
-        self._state = Pose3D(
-            position=(
-                self._state.position[0] + MOVE_STEP_M * math.cos(yaw),
-                self._state.position[1] + MOVE_STEP_M * math.sin(yaw),
-                self._state.position[2],
-            ),
-            yaw=yaw,
-        )
-        self._stopped = False
+        if action in (DiscreteAction.MOVE_FORWARD, DiscreteAction.MOVE_BACKWARD):
+            sign = 1.0 if action is DiscreteAction.MOVE_FORWARD else -1.0
+            yaw = self._state.yaw
+            self._state = Pose3D(
+                position=(
+                    self._state.position[0] + sign * MOVE_STEP_M * math.cos(yaw),
+                    self._state.position[1] + sign * MOVE_STEP_M * math.sin(yaw),
+                    self._state.position[2],
+                ),
+                yaw=yaw,
+            )
+            self._stopped = False
+            return ExecutionFeedback(
+                action.value,
+                True,
+                self._state,
+                self._collision,
+                time.perf_counter() - started,
+                "executed",
+            )
+
+        # Unreachable: all valid actions are handled above.
+        self.stop()
         return ExecutionFeedback(
-            action.value, True, self._state, self._collision, time.perf_counter() - started, "executed"
+            action.value, False, self._state, self._collision, 0.0, "unknown action"
         )
 
     # 【方法】航点指令。
