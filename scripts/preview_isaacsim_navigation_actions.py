@@ -23,6 +23,7 @@ Run with Isaac Sim's Python:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import termios
 import tty
@@ -117,6 +118,30 @@ def _parse_robot_start_pose(
     raise ValueError(f"{name} must be a 3D position, a 4D pose [x, y, z, yaw_deg], or a mapping")
 
 
+def _load_scene_go2_placement(scene_path: str | Path) -> tuple[tuple[float, float, float] | None, float]:
+    """Fallback robot start pose from the InternScenes scene.json go2_placement field."""
+    scene_file = Path(scene_path).expanduser()
+    if not scene_file.exists():
+        return None, 0.0
+    json_path = scene_file.with_suffix(".json")
+    if not json_path.exists():
+        return None, 0.0
+    try:
+        payload = json.loads(json_path.read_text())
+    except Exception:
+        return None, 0.0
+    placement = payload.get("go2_placement") or {}
+    if not placement.get("valid", False):
+        return None, 0.0
+    pos = placement.get("position_m") or {}
+    x = pos.get("x")
+    y = pos.get("y")
+    if x is None or y is None:
+        return None, 0.0
+    # scene.json stores the floor-plane (x, y); lift to Go2 base height.
+    return (float(x), float(y), 0.35), 0.0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -133,9 +158,14 @@ def main() -> int:
     args = parse_args()
     config = load_config(args.config)
     execution = config.section("execution")
+    scene_path = execution.get("scene")
     robot_start, robot_yaw_deg = _parse_robot_start_pose(
         execution.get("robot_start"), "robot_start"
     )
+    if robot_start is None and scene_path:
+        robot_start_from_scene, scene_yaw_deg = _load_scene_go2_placement(scene_path)
+        if robot_start_from_scene is not None:
+            robot_start, robot_yaw_deg = robot_start_from_scene, scene_yaw_deg
     camera_fps = int(execution.get("camera_fps", 30))
     if not 30 <= camera_fps <= 60:
         raise ValueError(f"execution.camera_fps must be between 30 and 60, got {camera_fps}")
@@ -200,6 +230,8 @@ def main() -> int:
     action_counts: dict[str, int] = {action.value: 0 for action in DiscreteAction}
     try:
         executor.reset()
+        initial_state = executor.get_state()
+        print(f"Initial robot pose: x={initial_state.position[0]:.3f}, y={initial_state.position[1]:.3f}, z={initial_state.position[2]:.3f}, yaw={initial_state.yaw:.3f}")
         while True:
             frame = executor.get_observation()
             Image.fromarray(frame.rgb).save(head_dir / f"frame_{frame_index:04d}.png")

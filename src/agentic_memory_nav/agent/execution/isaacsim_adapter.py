@@ -393,8 +393,14 @@ class IsaacSimExecutor:
             self._environment_bounds = self._get_environment_bounds()
             self._add_environment_planes(self._environment_planes)
             self._apply_builtin_grey_studio_light_rig()
-            if self._validate_initial_placement:
-                self._enable_scene_collisions()
+            # Add a scene-level dome light so the camera-rendered frame is lit
+            # (the viewport lighting rig alone does not illuminate the camera sensor).
+            self._add_interior_dome_light(intensity=1000.0)
+            # Scene meshes must always be registered as static colliders so that
+            # _can_move_to overlap queries can hit walls/furniture. Tying this to
+            # validate_initial_placement is a bug: it silently disables collisions
+            # for quick-test configs and the robot walks through geometry.
+            self._enable_scene_collisions()
         else:
             # `add_default_ground_plane()` references a large "Grid" reference environment
             # asset with horizon markings; at robot-eye-level that dominates the whole
@@ -409,11 +415,7 @@ class IsaacSimExecutor:
             )
             # A bare stage has no usable illumination; match the verified recorder setup
             # (scripts/record_isaacsim_sequence.py) so RGB frames aren't near-black.
-            from pxr import UsdLux  # type: ignore[import-not-found]
-
-            UsdLux.DomeLight.Define(
-                self._world.stage, "/World/realtime_agent_dome_light"
-            ).CreateIntensityAttr(1000.0)
+            self._add_interior_dome_light(intensity=1000.0)
             self._add_procedural_obstacles()
 
         if self.robot_usd:
@@ -608,6 +610,8 @@ class IsaacSimExecutor:
     # 【方法】应用 Isaac Sim 内置 Grey Studio 灯光 rig(经视口灯光 API)。
     # 【原因】真实场景需要稳定照明；解析 lighting 扩展路径找到 Grey_Studio.usda 并启用，
     #        失败则抛错。
+    # 【注意】该 rig 主要影响视口/流媒体显示。相机渲染帧仍需要场景内真实 UsdLux 光源，
+    #        因此 _apply_builtin_grey_studio_light_rig 之后还会调用 _add_interior_dome_light。
     def _apply_builtin_grey_studio_light_rig(self) -> None:
         """Apply Isaac Sim's built-in Grey Studio rig through its viewport lighting API."""
         import carb  # type: ignore[import-not-found]
@@ -636,6 +640,55 @@ class IsaacSimExecutor:
         success, _, _ = _set_lighting_mode("Grey Studio", usd_context=self._simulation_app.context)
         if not success:
             raise RuntimeError("Isaac Sim failed to apply built-in Grey_Studio light rig")
+
+    def _add_interior_lighting_rig(
+        self,
+        intensity: float | None = None,
+        dome_intensity: float = 5000.0,
+        distant_intensity: float = 3000.0,
+    ) -> None:
+        """Add a UsdLux rig that actually illuminates the camera-rendered RGB frame.
+
+        InternScenes conversions contain no UsdLux lights. The viewport lighting
+        rig only lights the streamed/editor viewport; the camera sensor sees the
+        actual stage illumination, which is otherwise black indoors. We replicate
+        the verified Grey Studio rig (DomeLight + DistantLight) directly on the
+        stage so the renderer sees it, while cranking intensities to compensate
+        for interior geometry that absorbs a lot of light.
+
+        ``intensity`` is accepted as a backwards-compatible alias for
+        ``dome_intensity`` because older call sites pass it as a keyword.
+        """
+        from pxr import Sdf, UsdLux  # type: ignore[import-not-found]
+
+        if intensity is not None:
+            dome_intensity = intensity
+
+        dome = UsdLux.DomeLight.Define(self._world.stage, "/World/realtime_agent_dome_light")
+        dome.CreateIntensityAttr(float(dome_intensity))
+        dome.CreateExposureAttr(0.5)
+        dome.CreateColorAttr((1.0, 1.0, 1.0))
+        dome.CreateColorTemperatureAttr(6500.0)
+        dome.CreateTextureFileAttr("")
+
+        # A directional sun gives the interior shape/definiton and prevents the
+        # scene from looking like a flat ambient blob. The rotation points it
+        # slightly downward through the room.
+        sun = UsdLux.DistantLight.Define(self._world.stage, "/World/realtime_agent_sun_light")
+        sun.CreateIntensityAttr(float(distant_intensity))
+        sun.CreateAngleAttr(34.3)
+        sun.CreateColorAttr((1.0, 1.0, 1.0))
+        # DistantLight has no orient attr; rotate the xform.
+        sun_xform = self._world.stage.GetPrimAtPath("/World/realtime_agent_sun_light")
+        if sun_xform.IsValid():
+            from pxr import Gf  # type: ignore[import-not-found]
+            rot_op = sun_xform.CreateAttribute("xformOp:rotateXYZ", Sdf.ValueTypeNames.Double3)
+            rot_op.Set(Gf.Vec3d(255.0, 0.0, 0.0))
+            order = sun_xform.CreateAttribute("xformOpOrder", Sdf.ValueTypeNames.TokenArray)
+            order.Set(["xformOp:rotateXYZ"])
+
+    # Backwards-compatible alias kept in case anything still calls it by name.
+    _add_interior_dome_light = _add_interior_lighting_rig
 
     # 【方法】计算 /World/scene 的世界包围盒(对齐范围 min/max)。
     # 【原因】供平面/俯视相机放置、碰撞校验使用。
@@ -738,13 +791,142 @@ class IsaacSimExecutor:
 
     # 【方法】把导入的渲染网格(mesh)注册为静态 PhysX 环境碰撞体。
     # 【原因】只有带点的 mesh 才可查询碰撞；供 _can_move_to 预检使用。
+    #       InternScenes 的 room-shell 是一个实心长方体，直接把整个内部变成碰撞
+    #       体会让机器人寸步难行；这里识别这种外壳并替换为 6 张薄壳（墙/地/顶）。
     def _enable_scene_collisions(self) -> None:
-        """Make imported render meshes queryable as static PhysX environment colliders."""
-        from pxr import UsdGeom, UsdPhysics  # type: ignore[import-not-found]
+        """Make imported render meshes queryable as static PhysX environment colliders.
 
+        Solid room-shell meshes (low vertex count, large volume) are replaced by
+        six thin slab colliders so the robot can navigate inside the room.
+        """
+        from pxr import Gf, Sdf, UsdGeom, UsdPhysics  # type: ignore[import-not-found]
+
+        room_shell_paths: list[str] = []
         for prim in self._world.stage.Traverse():
-            if prim.IsA(UsdGeom.Mesh) and UsdGeom.Mesh(prim).GetPointsAttr().Get():
-                UsdPhysics.CollisionAPI.Apply(prim)
+            if not prim.IsA(UsdGeom.Mesh):
+                continue
+            mesh = UsdGeom.Mesh(prim)
+            points = mesh.GetPointsAttr().Get()
+            if not points:
+                continue
+
+            # Heuristic: InternScenes room shells are simple boxes that occupy
+            # the whole scene volume. Treating them as solid blocks navigation.
+            if self._is_room_shell_mesh(prim, points):
+                room_shell_paths.append(str(prim.GetPath()))
+                continue
+
+            pts = np.asarray(points)
+            lower = pts.min(axis=0)
+            upper = pts.max(axis=0)
+            sizes = upper - lower
+            volume = float(np.prod(sizes))
+            # Skip degenerate or flat planes used as floor/ceiling; we add our
+            # own thin slab colliders from the scene bounds instead. Keeping
+            # these meshes as colliders makes the robot permanently overlap the
+            # floor and can produce invalid PhysX geometry warnings.
+            if volume < 0.01 or np.any(sizes < 0.005):
+                continue
+
+            UsdPhysics.CollisionAPI.Apply(prim)
+
+        if room_shell_paths:
+            self._add_hollow_room_colliders_from_bounds()
+
+    def _is_room_shell_mesh(self, prim: Any, points: Any) -> bool:
+        """Detect solid room bounding-box meshes from InternScenes conversions."""
+        import numpy as np
+
+        name = str(prim.GetName())
+        if not (name.startswith("world_") or name.startswith("geometry_")):
+            return False
+        pts = np.asarray(points)
+        if pts.shape[0] < 8 or pts.shape[0] > 500:
+            return False
+        lower = pts.min(axis=0)
+        upper = pts.max(axis=0)
+        sizes = upper - lower
+        if np.any(sizes <= 0.0):
+            return False
+        volume = float(np.prod(sizes))
+        # A room shell is big (tens of cubic metres) and box-like (aspect ratio
+        # not extreme). The robot standing volume is ~0.3*0.4*0.6 = 0.07 m^3.
+        return volume > 5.0 and np.all(sizes > 0.3)
+
+    def _add_hollow_room_colliders_from_bounds(self) -> None:
+        """Add six thin box colliders for walls/floor/ceiling around /World/scene."""
+        from pxr import Gf, UsdGeom, UsdPhysics  # type: ignore[import-not-found]
+
+        lower, upper = self._environment_bounds
+        thickness = 0.05
+        x_mid = (float(lower[0]) + float(upper[0])) / 2.0
+        y_mid = (float(lower[1]) + float(upper[1])) / 2.0
+        z_mid = (float(lower[2]) + float(upper[2])) / 2.0
+        x_size = float(upper[0] - lower[0])
+        y_size = float(upper[1] - lower[1])
+        z_size = float(upper[2] - lower[2])
+        wall_specs = [
+            # name, center (x,y,z), half extents (x,y,z)
+            ("wall_min_x", (float(lower[0]) - thickness / 2, y_mid, z_mid), (thickness / 2, y_size / 2, z_size / 2)),
+            ("wall_max_x", (float(upper[0]) + thickness / 2, y_mid, z_mid), (thickness / 2, y_size / 2, z_size / 2)),
+            ("wall_min_y", (x_mid, float(lower[1]) - thickness / 2, z_mid), (x_size / 2, thickness / 2, z_size / 2)),
+            ("wall_max_y", (x_mid, float(upper[1]) + thickness / 2, z_mid), (x_size / 2, thickness / 2, z_size / 2)),
+            ("floor", (x_mid, y_mid, float(lower[2]) - thickness / 2), (x_size / 2, y_size / 2, thickness / 2)),
+            ("ceiling", (x_mid, y_mid, float(upper[2]) + thickness / 2), (x_size / 2, y_size / 2, thickness / 2)),
+        ]
+        for name, center, half_extents in wall_specs:
+            path = f"/World/{name}_collider"
+            self._add_box_mesh_collider(path, center, half_extents)
+            self._environment_plane_paths.add(path)
+
+    def _add_box_mesh_collider(
+        self,
+        path: str,
+        center: tuple[float, float, float],
+        half_extents: tuple[float, float, float],
+    ) -> None:
+        """Create a static box mesh collider with explicit vertices.
+
+        Using an explicit triangle mesh avoids the ambiguous scale semantics of
+        Isaac Sim's high-level cuboid wrappers and ensures overlap_box queries
+        see the expected bounds.
+        """
+        from pxr import Gf, UsdGeom, UsdPhysics  # type: ignore[import-not-found]
+
+        cx, cy, cz = (float(v) for v in center)
+        hx, hy, hz = (float(v) for v in half_extents)
+        points = [
+            Gf.Vec3f(cx - hx, cy - hy, cz - hz),
+            Gf.Vec3f(cx + hx, cy - hy, cz - hz),
+            Gf.Vec3f(cx + hx, cy + hy, cz - hz),
+            Gf.Vec3f(cx - hx, cy + hy, cz - hz),
+            Gf.Vec3f(cx - hx, cy - hy, cz + hz),
+            Gf.Vec3f(cx + hx, cy - hy, cz + hz),
+            Gf.Vec3f(cx + hx, cy + hy, cz + hz),
+            Gf.Vec3f(cx - hx, cy + hy, cz + hz),
+        ]
+        # 12 triangles (two per face)
+        indices = [
+            0, 2, 1, 0, 3, 2,  # bottom
+            4, 5, 6, 4, 6, 7,  # top
+            0, 1, 5, 0, 5, 4,  # front
+            2, 3, 7, 2, 7, 6,  # back
+            0, 4, 7, 0, 7, 3,  # left
+            1, 2, 6, 1, 6, 5,  # right
+        ]
+        mesh = UsdGeom.Mesh.Define(self._world.stage, path)
+        mesh.CreatePointsAttr(points)
+        mesh.CreateFaceVertexCountsAttr([3] * 12)
+        mesh.CreateFaceVertexIndicesAttr(indices)
+        mesh.CreateExtentAttr([
+            Gf.Vec3f(cx - hx, cy - hy, cz - hz),
+            Gf.Vec3f(cx + hx, cy + hy, cz + hz),
+        ])
+        collision = UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+        collision.CreateCollisionEnabledAttr(True)
+        body = UsdPhysics.RigidBodyAPI.Apply(mesh.GetPrim())
+        body.CreateKinematicEnabledAttr(True)
+        body.CreateRigidBodyEnabledAttr(True)
 
     # 【方法】循环前校验：Go2 站立体积与环境碰撞体相交则中止(抛错)。
     # 【原因】避免机器人初始嵌入墙/地板。
@@ -768,11 +950,15 @@ class IsaacSimExecutor:
 
         def report_overlap(hit: Any) -> bool:
             collider = str(hit.rigid_body)
-            if (
-                not collider.startswith("/World/robot")
-                and collider not in self._environment_plane_paths
-            ):
-                hits.append(collider)
+            if collider.startswith("/World/robot"):
+                return True
+            # Ignore the viewport lighting rig's ground plane and any other
+            # non-scene colliders that leak into overlap queries.
+            if collider.startswith("/OmniKit_Viewport_LightRig"):
+                return True
+            if collider in self._environment_plane_paths:
+                return True
+            hits.append(collider)
             return True
 
         half_x, half_y, half_z = _GO2_STANDING_HALF_EXTENTS_M
