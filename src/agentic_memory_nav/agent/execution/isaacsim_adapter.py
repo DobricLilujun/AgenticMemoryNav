@@ -525,33 +525,26 @@ class IsaacSimExecutor:
             viewport.camera_path = camera_path
 
     # 【方法】在 World 建立前，经 SimulationApp 的 USD context 打开环境场景。
-    # 【分支】up_axis='y' 时：写一个临时 .usda 包装层，把场景放入 /World/scene 子层并
-    #        加 90° 旋转(0.707,0.707,0,0)，把 Y-up 场景转成 Z-up；否则直接打开。
+    # 【分支】场景 up-axis 为 Y 时：写一个临时 .usda 包装层，把场景放入 /World/scene 子层并
+    #        加 90° 旋转(0.707,0.707,0,0)，把 Y-up 场景转成 Z-up。
     # 【原因】Isaac Sim 要求 Z-up；包装层保留 /World 恒等变换(场景对齐放在 /World/scene)。
+    # 【关键修复】InternScenes 转换出的 USD 顶层是 /Objects(几体)+/Look(材质)，没有 /World。
+    #        旧代码用 @scene@</World> 引用一个不存在的 prim → /World/scene 为空 → 场景渲染全空
+    #        (只剩 adapter 自己加的灯光/机器人)。这里改为引用真实内容，并按 USD 实际 up-axis 旋转。
     def _open_scene_stage(self, scene: str, up_axis: str) -> None:
         """Open the environment through SimulationApp's USD context before World setup.
 
-        Some authored USD scenes already carry a root transform or a custom
-        hierarchy; forcing every scene into a strict /World identity assumption is
-        brittle and breaks legitimate authored scenes. Instead, we wrap the asset
-        under a neutral /World/scene and only apply a Y-up rotation when the
-        caller explicitly requests it.
+        The InternScenes conversion writes scene content under top-level prims
+        (/Objects for geometry, /Look for materials) with a Y up-axis and NO
+        /World prim. A wrapper that references @scene@</World> therefore pulls in
+        nothing and the rendered scene is empty (only the robot/lights added by the
+        adapter remain). We instead reference the real content prim and apply a
+        90deg Y-up->Z-up rotation on the wrapper when the asset is Y-up. The rotation
+        is applied here (never baked into the asset) so the robot placement
+        coordinates in scene.json stay valid in the original asset frame.
         """
-        scene_to_open = scene
         wrapper = Path(tempfile.gettempdir()) / f"agentic_memory_nav_{Path(scene).stem}_wrapped.usda"
-        wrapper.write_text(
-            '#usda 1.0\n(\n    defaultPrim = "World"\n    upAxis = "Z"\n)\n\n'
-            'def Xform "World"\n{\n'
-            f'    def Xform "scene" (\n        prepend references = @{scene}@</World>\n    )\n'
-            "    {\n"
-            + (
-                '        quatd xformOp:orient = (0.70710678, 0.70710678, 0, 0)\n'
-                '        uniform token[] xformOpOrder = ["xformOp:orient"]\n'
-                if up_axis.lower() == "y"
-                else ""
-            )
-            + "    }\n}\n"
-        )
+        wrapper.write_text(self._build_scene_wrapper_text(scene, up_axis))
         scene_to_open = str(wrapper)
 
         context = self._simulation_app.context
@@ -559,6 +552,51 @@ class IsaacSimExecutor:
             raise RuntimeError(f"Isaac Sim failed to open scene stage: {scene_to_open}")
         while context.get_stage_loading_status()[2] > 0:
             self._simulation_app.update()
+
+    def _build_scene_wrapper_text(self, scene: str, up_axis: str) -> str:
+        """Build a wrapper that pulls the scene's real content into /World/scene.
+
+        References @scene@</Objects> (geometry) when present, else falls back to the
+        whole-layer reference, so both old (/World-rooted) and new (/Objects-rooted)
+        InternScenes assets load. A Y-up asset is rotated 90deg about X so it stands
+        upright in the Z-up Isaac Sim world.
+        """
+        asset_up, ref = "", None
+        # Prefer a direct pxr read of the asset to pick the reference path that
+        # actually holds geometry. New pipeline output nests content under /World
+        # (/World/Objects); older assets keep it at the top level (/Objects). If
+        # pxr is unavailable at this point we still never revert to the empty
+        # whole-layer reference -- we default to the InternScenes-standard
+        # /Objects layout instead of the broken /World assumption.
+        try:
+            from pxr import Usd, UsdGeom  # type: ignore[import-not-found]
+            probe = Usd.Stage.Open(scene)
+            asset_up = str(UsdGeom.GetStageUpAxis(probe)).lower()
+            for candidate in ("/World/Objects", "/Objects", "/World"):
+                prim = probe.GetPrimAtPath(candidate)
+                if prim.IsValid() and len(prim.GetChildren()) > 0:
+                    ref = f"@{scene}@<{candidate}>"
+                    break
+        except Exception:
+            pass
+        if ref is None:
+            ref = f"@{scene}@</Objects>"
+        if asset_up:
+            rotate = asset_up == "y"
+        else:
+            rotate = up_axis.lower() == "y"
+        rotate_lines = (
+            "        quatd xformOp:orient = (0.70710678, 0.70710678, 0, 0)\n"
+            "        uniform token[] xformOpOrder = [\"xformOp:orient\"]\n"
+        ) if rotate else ""
+        return (
+            "#usda 1.0\n(\n    defaultPrim = \"World\"\n    upAxis = \"Z\"\n)\n\n"
+            "def Xform \"World\"\n{\n"
+            f'    def Xform "scene" (\n        prepend references = {ref}\n    )\n'
+            "    {\n"
+            + rotate_lines
+            + "    }\n}\n"
+        )
 
     # 【方法】允许作者化 USD 根上带有原生变换；我们只需要保证场景可访问，
     #        不强制要求 /World 必须是零 xformOps。
