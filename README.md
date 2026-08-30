@@ -227,6 +227,8 @@ ruff format --check .
 
 ## Commandline for Demo Identification
 
+~/isaacsim/isaac-sim.streaming.sh 
+
 Action Simulation:
 
 ~/isaacsim/python.sh scripts/preview_isaacsim_navigation_actions.py \

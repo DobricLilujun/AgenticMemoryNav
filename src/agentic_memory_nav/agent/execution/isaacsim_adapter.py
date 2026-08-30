@@ -644,29 +644,32 @@ class IsaacSimExecutor:
     def _add_interior_lighting_rig(
         self,
         intensity: float | None = None,
-        dome_intensity: float = 5000.0,
-        distant_intensity: float = 3000.0,
+        dome_intensity: float = 100000.0,
+        dome_exposure: float = 2.0,
+        distant_intensity: float = 10000.0,
+        sphere_intensity: float = 500000.0,
     ) -> None:
         """Add a UsdLux rig that actually illuminates the camera-rendered RGB frame.
 
         InternScenes conversions contain no UsdLux lights. The viewport lighting
         rig only lights the streamed/editor viewport; the camera sensor sees the
-        actual stage illumination, which is otherwise black indoors. We replicate
-        the verified Grey Studio rig (DomeLight + DistantLight) directly on the
-        stage so the renderer sees it, while cranking intensities to compensate
-        for interior geometry that absorbs a lot of light.
+        actual stage illumination, which is otherwise black indoors. We place a
+        bright omni SphereLight on the ceiling inside the room plus a very strong
+        DomeLight so the renderer has light both from inside and outside the
+        geometry.
 
         ``intensity`` is accepted as a backwards-compatible alias for
         ``dome_intensity`` because older call sites pass it as a keyword.
         """
-        from pxr import Sdf, UsdLux  # type: ignore[import-not-found]
+        from pxr import Gf, Sdf, UsdLux  # type: ignore[import-not-found]
 
         if intensity is not None:
             dome_intensity = intensity
 
+        # Very bright ambient fill so light reaches the camera even through walls.
         dome = UsdLux.DomeLight.Define(self._world.stage, "/World/realtime_agent_dome_light")
         dome.CreateIntensityAttr(float(dome_intensity))
-        dome.CreateExposureAttr(0.5)
+        dome.CreateExposureAttr(float(dome_exposure))
         dome.CreateColorAttr((1.0, 1.0, 1.0))
         dome.CreateColorTemperatureAttr(6500.0)
         dome.CreateTextureFileAttr("")
@@ -681,11 +684,75 @@ class IsaacSimExecutor:
         # DistantLight has no orient attr; rotate the xform.
         sun_xform = self._world.stage.GetPrimAtPath("/World/realtime_agent_sun_light")
         if sun_xform.IsValid():
-            from pxr import Gf  # type: ignore[import-not-found]
             rot_op = sun_xform.CreateAttribute("xformOp:rotateXYZ", Sdf.ValueTypeNames.Double3)
             rot_op.Set(Gf.Vec3d(255.0, 0.0, 0.0))
             order = sun_xform.CreateAttribute("xformOpOrder", Sdf.ValueTypeNames.TokenArray)
             order.Set(["xformOp:rotateXYZ"])
+
+        # Ceiling-mounted omni light that actually lives inside the room.
+        self._add_ceiling_sphere_light(intensity=float(sphere_intensity))
+
+    def _find_ceiling_z(self) -> float | None:
+        """Return the lowest ceiling-ish prim's world Z, or None if not found."""
+        from pxr import UsdGeom  # type: ignore[import-not-found]
+
+        stage = self._world.stage
+        scene = stage.GetPrimAtPath("/World/scene")
+        if not scene.IsValid():
+            scene = stage.GetPrimAtPath("/World")
+        if not scene.IsValid():
+            return None
+
+        cache = UsdGeom.BBoxCache(0, [UsdGeom.Tokens.default_])
+        best_z: float | None = None
+        scene_path_str = str(scene.GetPath())
+        for prim in self._world.stage.Traverse():
+            if not str(prim.GetPath()).startswith(scene_path_str):
+                continue
+            name = prim.GetName().lower()
+            if "ceiling" not in name and "roof" not in name:
+                continue
+            bound = cache.ComputeWorldBound(prim)
+            aligned = bound.ComputeAlignedRange()
+            min_z = float(aligned.GetMin()[2])
+            # Use the lower face of the ceiling slab as the mounting height.
+            candidate = min_z
+            if best_z is None or candidate < best_z:
+                best_z = candidate
+        return best_z
+
+    def _add_ceiling_sphere_light(
+        self,
+        prim_path: str = "/World/realtime_agent_ceiling_light/sphere_light",
+        intensity: float = 500000.0,
+        radius: float = 0.15,
+    ) -> None:
+        """Add an omni SphereLight on the room ceiling, shining in all directions.
+
+        If the USD contains a prim whose name includes 'ceiling' or 'roof', the
+        light is placed just underneath its lowest world-Z face and centered in
+        X/Y. Otherwise it falls back to the top of the scene bounding box.
+        """
+        from pxr import Gf, UsdLux  # type: ignore[import-not-found]
+
+        lower, upper = self._environment_bounds
+        ceiling_z = self._find_ceiling_z()
+        if ceiling_z is None:
+            ceiling_z = float(upper[2])
+
+        x_center = (float(lower[0]) + float(upper[0])) * 0.5
+        y_center = (float(lower[1]) + float(upper[1])) * 0.5
+        # Hang the omni light slightly below the ceiling so it is inside the room.
+        z_mount = ceiling_z - 0.1
+
+        light = UsdLux.SphereLight.Define(self._world.stage, prim_path)
+        light.CreateIntensityAttr(float(intensity))
+        light.CreateExposureAttr(1.0)
+        light.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 1.0))
+        light.CreateColorTemperatureAttr(5500.0)
+        light.CreateRadiusAttr(float(radius))
+        # SphereLight radiates in all directions, so it only needs translation.
+        light.AddTranslateOp().Set(Gf.Vec3d(x_center, y_center, z_mount))
 
     # Backwards-compatible alias kept in case anything still calls it by name.
     _add_interior_dome_light = _add_interior_lighting_rig

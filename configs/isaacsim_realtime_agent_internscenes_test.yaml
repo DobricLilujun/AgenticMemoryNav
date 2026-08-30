@@ -17,7 +17,7 @@ perception:
 
 execution:
 
-  scene: /home/snt/projects/AgenticMemoryNav/issacsim-assets/normalized/3rscan_55551073-36f1-29c0-8a7d-91902bdddb1f/scene.usd
+  scene: /home/snt/projects/AgenticMemoryNav/issacsim-assets/normalized/scannet_scene0370_02/scene.usd
   scene_up_axis: z
   light_rig: gray_studio
   robot_usd: /home/snt/projects/AgenticMemoryNav/issacsim-assets/Go2/configuration/go2_description_physics.usd
@@ -30,7 +30,7 @@ execution:
   #   position: [-2.705, 2.005, 0.35]
   #   yaw_deg: 0.0
 
-  
+
   validate_initial_placement: true
 
   environment_planes: {}
