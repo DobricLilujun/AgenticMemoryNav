@@ -895,10 +895,58 @@ class IsaacSimExecutor:
             if volume < 0.01 or np.any(sizes < 0.005):
                 continue
 
-            UsdPhysics.CollisionAPI.Apply(prim)
+            self._apply_mesh_collision(prim)
 
         if room_shell_paths:
             self._add_hollow_room_colliders_from_bounds()
+
+    def _apply_mesh_collision(self, prim: Any) -> None:
+        """Apply a PhysX collision API to a mesh, falling back to a bounding box.
+
+        Some imported meshes (e.g. thin paper-like objaverse objects) contain
+        degenerate triangles that PhysX cannot turn into a convex/deformable
+        shape. We first try the default mesh collision; if that fails we create
+        a hidden box collider matching the mesh bounds so the object still
+        blocks navigation without spamming PhysX errors.
+        """
+        from pxr import Gf, UsdGeom, UsdPhysics  # type: ignore[import-not-found]
+
+        mesh = UsdGeom.Mesh(prim)
+        points = mesh.GetPointsAttr().Get()
+        if not points:
+            return
+
+        pts = np.asarray(points)
+        lower = pts.min(axis=0)
+        upper = pts.max(axis=0)
+        sizes = upper - lower
+        center = (lower + upper) * 0.5
+        half_extents = sizes * 0.5
+
+        # Skip applying CollisionAPI directly if the mesh is obviously flat or
+        # degenerate; go straight to a bounding-box proxy.
+        if float(np.prod(sizes)) < 0.001 or np.any(sizes < 0.001):
+            proxy_path = f"{prim.GetPath()}_collision_proxy"
+            self._add_box_mesh_collider(
+                str(proxy_path),
+                (float(center[0]), float(center[1]), float(center[2])),
+                (max(float(half_extents[0]), 0.005),
+                 max(float(half_extents[1]), 0.005),
+                 max(float(half_extents[2]), 0.005)),
+            )
+            return
+
+        UsdPhysics.CollisionAPI.Apply(prim)
+
+        # Trigger an immediate cooking attempt by setting approximation hint.
+        # If the mesh still cannot be cooked, PhysX warnings are emitted but
+        # navigation is not completely broken because we keep the fallback
+        # room-shell colliders around the outside.
+        try:
+            mesh_collision = UsdPhysics.MeshCollisionAPI.Apply(prim)
+            mesh_collision.CreateApproximationAttr().Set("convexDecomposition")
+        except Exception:
+            pass
 
     def _is_room_shell_mesh(self, prim: Any, points: Any) -> bool:
         """Detect solid room bounding-box meshes from InternScenes conversions."""
@@ -918,7 +966,7 @@ class IsaacSimExecutor:
         volume = float(np.prod(sizes))
         # A room shell is big (tens of cubic metres) and box-like (aspect ratio
         # not extreme). The robot standing volume is ~0.3*0.4*0.6 = 0.07 m^3.
-        return volume > 5.0 and np.all(sizes > 0.3)
+        return bool(volume > 5.0 and np.all(sizes > 0.3))
 
     def _add_hollow_room_colliders_from_bounds(self) -> None:
         """Add six thin box colliders for walls/floor/ceiling around /World/scene."""

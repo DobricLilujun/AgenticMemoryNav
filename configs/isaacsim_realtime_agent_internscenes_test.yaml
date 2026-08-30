@@ -17,7 +17,7 @@ perception:
 
 execution:
 
-  scene: /home/snt/projects/AgenticMemoryNav/issacsim-assets/normalized/scannet_scene0370_02/scene.usd
+  scene: /home/snt/projects/AgenticMemoryNav/issacsim-assets/normalized/scannet_scene0405_00/scene.usd
   scene_up_axis: z
   light_rig: gray_studio
   robot_usd: /home/snt/projects/AgenticMemoryNav/issacsim-assets/Go2/configuration/go2_description_physics.usd
