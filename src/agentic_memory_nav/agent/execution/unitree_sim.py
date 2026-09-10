@@ -1,9 +1,5 @@
 """Planar Unitree-like waypoint executor for the CPU MVP."""
 
-# 【模块】面向 CPU MVP 的平面(Unitree 类)航点执行器。
-# 【作用】纯 CPU、无需 GPU/Isaac 的轻量后端，用于快速验证导航流水线；
-#         运动学积分(非物理)，深度固定 2.0m，RGB 为占位画面。
-
 from __future__ import annotations
 
 import math
@@ -30,11 +26,9 @@ from agentic_memory_nav.common.types import (
 )
 
 
-# 【类】平面 Unitree 执行器（RobotBackend 实现）。
-# 【原因】MVP 阶段无需高保真物理，用简单运动学积分即可跑通端到端。
-# 【状态】_state 位姿；_collision 是否碰撞；_stopped 是否已停；
-#        _frame_index 帧计数；max_speed/dt 由安全器与配置给定。
 class UnitreeSimExecutor:
+    """Kinematic CPU backend for fast pipeline validation."""
+
     def __init__(self, safety: SafetyController, max_speed: float = 0.5, dt: float = 0.1) -> None:
         self.safety = safety
         self.max_speed = min(max_speed, safety.max_speed)
@@ -45,22 +39,19 @@ class UnitreeSimExecutor:
         self._frame_index = 0
         self._manual_pitch_offset_rad = 0.0
 
-    # 【方法】重置：位姿归零、清碰撞/停状态、帧计数归零。
     def reset(self) -> None:
+        """Reset pose, collision state, and frame counter."""
         self._state = Pose3D()
         self._collision = False
         self._stopped = True
         self._frame_index = 0
         self._manual_pitch_offset_rad = 0.0
 
-    # 【方法】返回当前位姿 Pose3D。
     def get_state(self) -> Pose3D:
         return self._state
 
-    # 【方法】生成一帧占位观察：RGB 为 64×96 灰底(绿通道=40)，
-    #        第 2 帧起在中心画红块(220,20,20)便于目视定位；深度固定 2.0m。
-    # 【原因】MVP 无真实渲染，用合成画面占位以打通观察接口。
     def get_observation(self) -> FrameObservation:
+        """Return a placeholder RGB-D frame (fixed 2.0 m depth)."""
         height, width = 64, 96
         rgb = np.zeros((height, width, 3), dtype=np.uint8)
         rgb[..., 1] = 40
@@ -79,10 +70,8 @@ class UnitreeSimExecutor:
         self._frame_index += 1
         return frame
 
-    # 【方法】速度指令（运动学积分）。
-    # 【原因】速度/角速度超限时急停并返回失败；否则按 vx,vy 积分位置、
-    #        按 wz 积分偏航，时间步长 dt。
     def send_velocity_command(self, vx: float, vy: float, wz: float) -> ExecutionFeedback:
+        """Integrate velocity kinematically."""
         started = time.perf_counter()
         speed = math.hypot(vx, vy)
         if speed > self.max_speed or abs(wz) > self.safety.max_angular_speed:
@@ -103,10 +92,8 @@ class UnitreeSimExecutor:
             "velocity", True, self._state, False, time.perf_counter() - started, "executed"
         )
 
-        # 【方法】标准 9-action 离散指令；语义与 IsaacSimExecutor.apply_discrete_action 一致。
-
-    # 【原因】本执行器无碰撞体，move_* 无碰撞预检，仅按当前 yaw 前移/后移。
     def apply_discrete_action(self, action: DiscreteAction | str) -> ExecutionFeedback:
+        """Execute one of the standard discrete actions."""
         started = time.perf_counter()
         action = DiscreteAction(action)
 
@@ -186,11 +173,8 @@ class UnitreeSimExecutor:
             action.value, False, self._state, self._collision, 0.0, "unknown action"
         )
 
-    # 【方法】航点指令。
-    # 【流程】① 安全校验(失败→急停)；② 计算到目标距离(X/Z 平面)；
-    #        ③ 距离为 0 → 已到；④ 限速 travel=min(距离, 速度×时长)；
-    #        ⑤ 沿方向移动 travel，偏航指向目标；⑥ 到达判定 travel≈距离。
     def send_waypoint(self, waypoint: Vector3, intent: ActionIntent) -> ExecutionFeedback:
+        """Move toward a waypoint with safety checks and stop on arrival."""
         started = time.perf_counter()
         try:
             self.safety.validate(intent, self._state, self._collision)
@@ -223,15 +207,14 @@ class UnitreeSimExecutor:
             "waypoint reached" if reached else "action timeout before waypoint",
         )
 
-    # 【方法】置 _stopped=True（本实现无物理，仅标记状态）。
     def stop(self) -> None:
+        """Mark the executor as stopped."""
         self._stopped = True
 
-    # 【方法】调用安全器急停 + 自身 stop。
     def emergency_stop(self) -> None:
+        """Latch the safety controller and stop."""
         self.safety.emergency_stop()
         self.stop()
 
-    # 【方法】返回当前碰撞标志。
     def is_collision(self) -> bool:
         return self._collision

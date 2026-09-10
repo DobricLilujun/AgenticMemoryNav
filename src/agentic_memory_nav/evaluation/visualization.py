@@ -81,10 +81,7 @@ def _render_scene_graph(graph_file: Path, output_file: Path) -> None:
         ax=ax,
     )
     nx.draw_networkx_edges(graph, positions, arrows=True, arrowstyle="-|>", width=1.3, ax=ax)
-    edge_labels = {
-        (left, right): data["relation"]
-        for left, right, data in graph.edges(data=True)
-    }
+    edge_labels = {(left, right): data["relation"] for left, right, data in graph.edges(data=True)}
     nx.draw_networkx_edge_labels(graph, positions, edge_labels=edge_labels, font_size=7, ax=ax)
     ax.set_title("Scene Graph")
     ax.axis("off")
@@ -97,11 +94,7 @@ def _render_frame_gallery(frames_dir: Path, output_file: Path) -> None:
     if not frames_dir.is_dir():
         return
     image_files = sorted(
-        [
-            path
-            for path in frames_dir.iterdir()
-            if path.suffix.lower() in {".png", ".jpg", ".jpeg"}
-        ]
+        [path for path in frames_dir.iterdir() if path.suffix.lower() in {".png", ".jpg", ".jpeg"}]
     )
     if not image_files:
         return

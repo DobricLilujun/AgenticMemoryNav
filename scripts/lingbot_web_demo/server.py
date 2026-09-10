@@ -58,7 +58,7 @@ def _produce(
     streamer: LiveGCTStreamer,
     video_path: Path,
     fps: float | None,
-    result_queue: "queue.Queue[tuple[str, Any]]",
+    result_queue: queue.Queue[tuple[str, Any]],
     stop_event: threading.Event,
 ) -> None:
     """Run in a background thread: feed the model and enqueue results as they land."""
@@ -87,7 +87,7 @@ async def websocket_handler(request: web.Request) -> web.StreamResponse:
     streamer: LiveGCTStreamer = request.app["streamer"]
     video_path: Path = request.app["video_path"]
     fps: float | None = request.app["fps"]
-    result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=4)
+    result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=4)
     stop_event = threading.Event()
     worker = threading.Thread(
         target=_produce, args=(streamer, video_path, fps, result_queue, stop_event), daemon=True

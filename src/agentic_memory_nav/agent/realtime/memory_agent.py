@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agentic_memory_nav.agent.mapping.mock_mapper import MockMapper
+from agentic_memory_nav.agent.perception.mock_perception import MockPerception
+from agentic_memory_nav.agent.vlm.backend import VLMBackend
 from agentic_memory_nav.common.types import (
     FrameObservation,
     MappingUpdate,
@@ -19,11 +22,8 @@ from agentic_memory_nav.common.types import (
     ObjectObservation,
     new_id,
 )
-from agentic_memory_nav.agent.mapping.mock_mapper import MockMapper
 from agentic_memory_nav.memory.knowledge_memory import KnowledgeMemory
 from agentic_memory_nav.memory.sqlite_store import SQLiteMemory
-from agentic_memory_nav.agent.perception.mock_perception import MockPerception
-from agentic_memory_nav.agent.vlm.backend import VLMBackend
 from agentic_memory_nav.scene_graph.graph import SceneGraph
 from agentic_memory_nav.scene_graph.updater import SceneGraphUpdater
 

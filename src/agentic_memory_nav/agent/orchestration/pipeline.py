@@ -11,6 +11,21 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 
+from agentic_memory_nav.agent.execution.isaacsim_adapter import IsaacSimExecutor
+from agentic_memory_nav.agent.execution.safety_controller import SafetyController
+from agentic_memory_nav.agent.execution.unitree_sim import UnitreeSimExecutor
+from agentic_memory_nav.agent.geometry.pointcloud_store import PointCloudStore
+from agentic_memory_nav.agent.lingbot.adapter import LingBotMapAdapter
+from agentic_memory_nav.agent.mapping.mock_mapper import MockMapper
+from agentic_memory_nav.agent.orchestration.event_bus import Event, EventBus, EventType
+from agentic_memory_nav.agent.perception.instance_segmentation import (
+    BoundingBoxSegmenter,
+    InstanceGeometryEnricher,
+)
+from agentic_memory_nav.agent.perception.mock_perception import MockPerception
+from agentic_memory_nav.agent.planning.rule_based_fallback import RuleBasedPlanner
+from agentic_memory_nav.agent.planning.task_parser import RuleBasedTaskParser
+from agentic_memory_nav.agent.vlm.backend import VLMBackend
 from agentic_memory_nav.common.types import MemoryItem, MemoryType, TaskStatus, jsonable, new_id
 from agentic_memory_nav.evaluation.experiment_logger import ExperimentRun
 from agentic_memory_nav.evaluation.metrics import (
@@ -18,23 +33,8 @@ from agentic_memory_nav.evaluation.metrics import (
     success_weighted_path_length,
 )
 from agentic_memory_nav.evaluation.visualization import render_run_artifacts
-from agentic_memory_nav.agent.execution.isaacsim_adapter import IsaacSimExecutor
-from agentic_memory_nav.agent.execution.safety_controller import SafetyController
-from agentic_memory_nav.agent.execution.unitree_sim import UnitreeSimExecutor
-from agentic_memory_nav.agent.geometry.pointcloud_store import PointCloudStore
-from agentic_memory_nav.agent.lingbot.adapter import LingBotMapAdapter
-from agentic_memory_nav.agent.mapping.mock_mapper import MockMapper
 from agentic_memory_nav.memory.knowledge_memory import KnowledgeMemory
 from agentic_memory_nav.memory.sqlite_store import SQLiteMemory
-from agentic_memory_nav.agent.orchestration.event_bus import Event, EventBus, EventType
-from agentic_memory_nav.agent.perception.instance_segmentation import (
-    BoundingBoxSegmenter,
-    InstanceGeometryEnricher,
-)
-from agentic_memory_nav.agent.perception.mock_perception import MockPerception
-from agentic_memory_nav.agent.vlm.backend import VLMBackend
-from agentic_memory_nav.agent.planning.rule_based_fallback import RuleBasedPlanner
-from agentic_memory_nav.agent.planning.task_parser import RuleBasedTaskParser
 from agentic_memory_nav.scene_graph.graph import SceneGraph
 from agentic_memory_nav.scene_graph.updater import SceneGraphUpdater
 

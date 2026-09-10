@@ -14,9 +14,9 @@ from typing import Any
 
 import numpy as np
 
-from agentic_memory_nav.common.types import FrameObservation, MappingUpdate, Pose3D
 from agentic_memory_nav.agent.geometry.ground_truth import backproject_depth_to_world
 from agentic_memory_nav.agent.mapping.local_submap import LocalSubmap, LocalSubmapBuilder
+from agentic_memory_nav.common.types import FrameObservation, MappingUpdate, Pose3D
 
 LingBotPredictor = Callable[[FrameObservation], dict[str, Any]]
 

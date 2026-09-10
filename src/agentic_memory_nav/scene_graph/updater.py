@@ -15,8 +15,8 @@ from agentic_memory_nav.common.types import (
     SceneTriple,
     new_id,
 )
-from agentic_memory_nav.scene_graph.object_association import AssociationDecision, ObjectAssociator
 from agentic_memory_nav.scene_graph.graph import SceneGraph
+from agentic_memory_nav.scene_graph.object_association import AssociationDecision, ObjectAssociator
 
 
 class SceneGraphUpdater:

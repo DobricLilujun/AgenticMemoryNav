@@ -22,7 +22,6 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from agentic_memory_nav.agent.execution.discrete_actions import DiscreteAction
 from agentic_memory_nav.agent.vlm.discrete_navigation import VLMDiscreteNavigationAgent
 from agentic_memory_nav.common.types import FrameObservation
 
@@ -91,7 +90,7 @@ class VLMDiscreteNavigation2DMapAgent(VLMDiscreteNavigationAgent):
             "   as the discrete actions allow. In all other cases, choose an action that reduces "
             "   the distance to the goal or re-positions the robot for a clearer approach.\n\n"
             "When describing objects in your reason, include a rough distance in meters if "
-            "possible (e.g., \"sofa 1.5m ahead\" or \"obstacle about 2m to the left\"). "
+            'possible (e.g., "sofa 1.5m ahead" or "obstacle about 2m to the left"). '
             "This helps maintain the spatial memory map.\n\n"
             f"You may use look_up at most {self.max_look_count} time(s) and look_down at most "
             f"{self.max_look_count} time(s) during the episode.\n"
@@ -173,15 +172,10 @@ class VLMDiscreteNavigation2DMapAgent(VLMDiscreteNavigationAgent):
                 message["content"] = self._2d_map_system_prompt
 
         # Optionally append the top-down map image to the user message.
-        if (
-            self._last_map_image is not None
-            and (self._step % self.map_image_interval) == 0
-        ):
+        if self._last_map_image is not None and (self._step % self.map_image_interval) == 0:
             map_url = self._rgb_data_url(self._last_map_image)
             for message in payload["messages"]:
-                if message.get("role") == "user" and isinstance(
-                    message.get("content"), list
-                ):
+                if message.get("role") == "user" and isinstance(message.get("content"), list):
                     message["content"].append(
                         {
                             "type": "text",
@@ -192,9 +186,7 @@ class VLMDiscreteNavigation2DMapAgent(VLMDiscreteNavigationAgent):
                             ),
                         }
                     )
-                    message["content"].append(
-                        {"type": "image_url", "image_url": {"url": map_url}}
-                    )
+                    message["content"].append({"type": "image_url", "image_url": {"url": map_url}})
                     break
 
         return payload

@@ -52,9 +52,12 @@ _ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_ROOT / "external-lib" / "lingbot-map"))
 
 from lingbot_map.models.gct_stream import GCTStream  # type: ignore[import-not-found]  # noqa: E402
-from lingbot_map.utils.geometry import closed_form_inverse_se3_general  # type: ignore[import-not-found]  # noqa: E402
-from lingbot_map.utils.pose_enc import pose_encoding_to_extri_intri  # type: ignore[import-not-found]  # noqa: E402
-
+from lingbot_map.utils.geometry import (
+    closed_form_inverse_se3_general,  # type: ignore[import-not-found]  # noqa: E402
+)
+from lingbot_map.utils.pose_enc import (
+    pose_encoding_to_extri_intri,  # type: ignore[import-not-found]  # noqa: E402
+)
 
 # Isaac optical axes map to OpenCV (camera) axes; the model's OpenCV pose is aligned
 # to the Isaac camera-to-world supplied by the client.
@@ -137,8 +140,9 @@ class LingBotMapAgent:
         image = _decode_image(str(request["image"]))
         tensor = _preprocess(image, self.image_size, self.patch_size).unsqueeze(0).unsqueeze(0)
         tensor = tensor.to(self.device)
-        with torch.no_grad(), torch.amp.autocast(
-            "cuda", dtype=self.dtype, enabled=self.device.type == "cuda"
+        with (
+            torch.no_grad(),
+            torch.amp.autocast("cuda", dtype=self.dtype, enabled=self.device.type == "cuda"),
         ):
             if self.frame_index == 0:
                 output = self.model.forward(
@@ -177,17 +181,21 @@ class LingBotMapAgent:
         world_points = output["world_points"][0, 0].detach().float().cpu().numpy()
         world_points = world_points.reshape(-1, 3) @ self.alignment[:3, :3].T
         world_points += self.alignment[:3, 3]
-        point_confidence = output["world_points_conf"][0, 0].detach().float().cpu().numpy().reshape(-1)
+        point_confidence = (
+            output["world_points_conf"][0, 0].detach().float().cpu().numpy().reshape(-1)
+        )
         valid = np.isfinite(world_points).all(axis=1) & (point_confidence >= 1.5)
         points = world_points[valid].astype(np.float32, copy=False)
         self.frame_index += 1
         return {
             "frame_id": str(request["frame_id"]),
-            "camera_pose": json.dumps({
-                "position": request["robot_position"],
-                "yaw": request["robot_yaw"],
-                "camera_to_world": aligned_c2w.tolist(),
-            }),
+            "camera_pose": json.dumps(
+                {
+                    "position": request["robot_position"],
+                    "yaw": request["robot_yaw"],
+                    "camera_to_world": aligned_c2w.tolist(),
+                }
+            ),
             "depth": _encode_array(depth),
             "confidence": _encode_array(confidence),
             "intrinsics": _encode_array(intrinsics[0, 0].detach().float().cpu().numpy()),

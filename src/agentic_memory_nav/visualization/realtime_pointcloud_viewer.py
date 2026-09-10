@@ -82,7 +82,11 @@ class RealtimePointCloudViewer:
         self._lock = threading.Lock()
         self._max_points = max(100, max_points)
         self._payload: dict[str, Any] = {
-            "points": [], "count": 0, "frame": None, "robot": [0.0, 0.0, 0.0], "yaw": 0.0
+            "points": [],
+            "count": 0,
+            "frame": None,
+            "robot": [0.0, 0.0, 0.0],
+            "yaw": 0.0,
         }
         self._cam_jpeg: bytes = b""
         self._placeholder: bytes = _placeholder_jpeg()
@@ -130,7 +134,7 @@ class RealtimePointCloudViewer:
         frame_id: str,
         robot: tuple[float, float, float],
         yaw: float,
-        rgb: "np.ndarray | None" = None,
+        rgb: np.ndarray | None = None,
     ) -> None:
         cloud = np.asarray(points, dtype=np.float32)
         if cloud.size == 0:

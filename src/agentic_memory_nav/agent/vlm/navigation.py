@@ -53,8 +53,7 @@ from urllib import request
 import numpy as np
 from PIL import Image
 
-from agentic_memory_nav.common.types import ActionType, ActionIntent, FrameObservation
-
+from agentic_memory_nav.common.types import ActionIntent, ActionType, FrameObservation
 
 # ---------------------------------------------------------------------------
 # Action vocabulary (the baseline motion set).
@@ -105,9 +104,9 @@ _SYSTEM_PROMPT = (
     "turn_left, turn_right, stop.\n"
     "Respond with ONLY a single JSON object and nothing else. No markdown, no code "
     "fences, no prose. The object must have exactly these fields:\n"
-    "  - \"action\": one of [forward, back, left, right, turn_left, turn_right, stop]\n"
-    "  - \"reason\": a short (<= 20 word) justification\n"
-    "  - \"confidence\": a number between 0 and 1\n"
+    '  - "action": one of [forward, back, left, right, turn_left, turn_right, stop]\n'
+    '  - "reason": a short (<= 20 word) justification\n'
+    '  - "confidence": a number between 0 and 1\n'
     "Do not include any other keys or any text before/after the JSON."
 )
 
@@ -140,13 +139,10 @@ class VLMSelfDecidingNavigationAgent:
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
-    def decide(
-        self, frame: FrameObservation
-    ) -> ActionIntent:
+    def decide(self, frame: FrameObservation) -> ActionIntent:
         """Return the next :class:`ActionIntent` for the given RGB frame."""
         self._step += 1
         action_name, reason, confidence = self._decide(frame)
-        sign = ACTION_SIGNS[action_name]
         return ActionIntent(
             action_id=f"vlm_step_{self._step}_{action_name}",
             action_type=_action_type(action_name),
@@ -163,16 +159,12 @@ class VLMSelfDecidingNavigationAgent:
             expected_observation=f"after {action_name}: {self.instruction}",
         )
 
-    def decide_velocity(
-        self, frame: FrameObservation
-    ) -> tuple[float, float, float]:
+    def decide_velocity(self, frame: FrameObservation) -> tuple[float, float, float]:
         """Return (vx, vy, wz) in base_link units for the current frame (baseline)."""
         action_name, _reason, _confidence = self._decide(frame)
         return self.velocity_for(action_name)
 
-    def decide_action(
-        self, frame: FrameObservation
-    ) -> tuple[str, str, float]:
+    def decide_action(self, frame: FrameObservation) -> tuple[str, str, float]:
         """One VLM call -> (action_name, reason, confidence). Use with ``velocity_for``
         to convert to a velocity without a second model call."""
         return self._decide(frame)
@@ -248,9 +240,7 @@ class VLMSelfDecidingNavigationAgent:
             body = response.read().decode("utf-8")
         return json.loads(body)
 
-    def _parse_action(
-        self, response: dict[str, Any]
-    ) -> tuple[str, str, float] | None:
+    def _parse_action(self, response: dict[str, Any]) -> tuple[str, str, float] | None:
         try:
             content = response["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):

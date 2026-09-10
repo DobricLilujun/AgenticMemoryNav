@@ -7,8 +7,8 @@ test:
 	pytest -q
 
 lint:
-	ruff check .
-	ruff format --check .
+	ruff check src tests main.py
+	ruff format --check src tests main.py
 
 demo:
-	python scripts/run_demo.py --config configs/default.yaml
+	python main.py --config configs/default.yaml

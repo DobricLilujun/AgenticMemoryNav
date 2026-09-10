@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 # Must be set before `import torch`; see external-lib/lingbot-map/demo.py for rationale.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -42,7 +42,9 @@ from lingbot_map.utils.geometry import (  # type: ignore[import-not-found]  # no
     closed_form_inverse_se3_general,
     unproject_depth_map_to_point_map,
 )
-from lingbot_map.utils.pose_enc import pose_encoding_to_extri_intri  # type: ignore[import-not-found]  # noqa: E402
+from lingbot_map.utils.pose_enc import (
+    pose_encoding_to_extri_intri,  # type: ignore[import-not-found]  # noqa: E402
+)
 
 
 @dataclass

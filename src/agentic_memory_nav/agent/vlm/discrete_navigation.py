@@ -158,15 +158,17 @@ class VLMDiscreteNavigationAgent(VLMSelfDecidingNavigationAgent):
             "   — you do not need to manually undo look_up/look_down.\n"
             "7. Rotation limits apply only in open space. If the direct route is blocked, if the "
             "   previous move_forward was ineffective, or if the robot has not made meaningful "
-            "   progress, never force move_forward merely because the robot has turned about 360°. "
-            "   In that case, treat the obstacle as a detour problem and commit to a clear bypass.\n"
-            "8. A visible target is NOT a valid reason to push straight ahead through a blocked path. "
-            "   If the direct route is obstructed, turn slightly away from the obstacle, create "
-            "   lateral displacement, and re-acquire the target from a new angle. Once the path is "
-            "   visibly clear, resume move_forward immediately instead of continuing to turn.\n"
-            "9. Stop immediately when the goal object is clearly visible and centered in the image. "
-            "   Once you can confidently say the instruction is satisfied, emit stop and do not "
-            "   take any further exploration actions.\n"
+            "   progress, never force move_forward merely because the robot has "
+            "turned about 360°. In that case, treat the obstacle as a detour problem and "
+            "commit to a clear bypass.\n"
+            "8. A visible target is NOT a valid reason to push straight ahead through a "
+            "blocked path. If the direct route is obstructed, turn slightly away from the "
+            "obstacle, create lateral displacement, and re-acquire the target from a new "
+            "angle. Once the path is visibly clear, resume move_forward immediately instead "
+            "of continuing to turn.\n"
+            "9. Stop immediately when the goal object is clearly visible and centered in "
+            "the image. Once you can confidently say the instruction is satisfied, emit stop "
+            "and do not take any further exploration actions.\n"
             "You may use look_up at most {self.max_look_count} time(s) and look_down at most "
             "{self.max_look_count} time(s) during the episode.\n"
             "You may choose exactly one action from this set: turn_left, turn_right, "
@@ -432,7 +434,8 @@ class VLMDiscreteNavigationAgent(VLMSelfDecidingNavigationAgent):
                 if center_x is None and isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
                     center_x = (bbox[0] + bbox[2]) / 2.0
                 if center_x is not None:
-                    width = getattr(frame.rgb, "shape", (0, 0))[1] if getattr(frame, "rgb", None) is not None else 0
+                    rgb = getattr(frame, "rgb", None)
+                    width = getattr(rgb, "shape", (0, 0))[1] if rgb is not None else 0
                     if width > 0:
                         normalized = (float(center_x) / float(width)) * 2.0 - 1.0
                         bearing_deg = normalized * 45.0
@@ -443,7 +446,8 @@ class VLMDiscreteNavigationAgent(VLMSelfDecidingNavigationAgent):
                         return f"ahead-left (bearing ≈ {bearing_deg:.0f}°)"
             elif hasattr(target_info, "center_x"):
                 center_x = float(target_info.center_x)
-                width = getattr(frame.rgb, "shape", (0, 0))[1] if getattr(frame, "rgb", None) is not None else 0
+                rgb = getattr(frame, "rgb", None)
+                width = getattr(rgb, "shape", (0, 0))[1] if rgb is not None else 0
                 if width > 0:
                     normalized = (center_x / float(width)) * 2.0 - 1.0
                     bearing_deg = normalized * 45.0
@@ -457,7 +461,6 @@ class VLMDiscreteNavigationAgent(VLMSelfDecidingNavigationAgent):
         if rgb is not None and getattr(rgb, "shape", None) is not None:
             width = rgb.shape[1]
             if width > 0:
-                center = width / 2.0
                 normalized = 0.0
                 return f"directly ahead (bearing ≈ {normalized:.0f}°)"
         return None
@@ -499,21 +502,36 @@ class VLMDiscreteNavigationAgent(VLMSelfDecidingNavigationAgent):
                 return action, f"avoidance timeout reached; return control ({reason})"
 
             preferred_turn = (
-                DiscreteAction.TURN_LEFT if self._circumnavigation_side == "left" else DiscreteAction.TURN_RIGHT
+                DiscreteAction.TURN_LEFT
+                if self._circumnavigation_side == "left"
+                else DiscreteAction.TURN_RIGHT
             )
             if self._circumnavigation_steps <= 2:
                 if action is preferred_turn:
-                    return action, f"avoidance step {self._circumnavigation_steps}: small turn ({reason})"
-                return preferred_turn, f"avoidance step {self._circumnavigation_steps}: forced small turn ({reason})"
+                    return (
+                        action,
+                        f"avoidance step {self._circumnavigation_steps}: small turn ({reason})",
+                    )
+                return (
+                    preferred_turn,
+                    f"avoidance step {self._circumnavigation_steps}: forced small turn ({reason})",
+                )
 
             if action is DiscreteAction.MOVE_FORWARD:
                 return action, f"avoidance forward step ({reason})"
-            if action in (
-                DiscreteAction.TURN_LEFT_BIG,
-                DiscreteAction.TURN_RIGHT_BIG,
+            if (
+                action
+                in (
+                    DiscreteAction.TURN_LEFT_BIG,
+                    DiscreteAction.TURN_RIGHT_BIG,
+                )
+                and self._circumnavigation_steps <= 6
             ):
-                if self._circumnavigation_steps <= 6:
-                    return preferred_turn, f"avoidance step {self._circumnavigation_steps}: replaced big turn with small turn ({reason})"
+                return (
+                    preferred_turn,
+                    f"avoidance step {self._circumnavigation_steps}: "
+                    f"replaced big turn with small turn ({reason})",
+                )
             return action, reason
 
         if action is not DiscreteAction.MOVE_FORWARD:
@@ -549,14 +567,16 @@ class VLMDiscreteNavigationAgent(VLMSelfDecidingNavigationAgent):
             if self._camera_pitch_state > 0:
                 return (
                     DiscreteAction.TURN_LEFT,
-                    f"camera already pitched up; look_up budget exhausted; turned left instead ({reason})",
+                    "camera already pitched up; look_up budget exhausted; "
+                    f"turned left instead ({reason})",
                 )
             self._look_up_used += 1
         elif action is DiscreteAction.LOOK_DOWN:
             if self._camera_pitch_state < 0:
                 return (
                     DiscreteAction.TURN_RIGHT,
-                    f"camera already pitched down; look_down budget exhausted; turned right instead ({reason})",
+                    "camera already pitched down; look_down budget exhausted; "
+                    f"turned right instead ({reason})",
                 )
             self._look_down_used += 1
         return action, reason
@@ -657,8 +677,10 @@ class VLMDiscreteNavigationAgent(VLMSelfDecidingNavigationAgent):
             "Situation: target is ahead-right (bearing +30°), but forward path is blocked by a "
             "large obstacle.\n"
             "Good action: turn_left_big.\n"
-            "Reason: circumnavigate from the open side, then re-approach the target from a new angle.\n"
-            "Bad action: move_forward toward the blocked path or turn_right toward the same obstacle.\n"
+            "Reason: circumnavigate from the open side, then re-approach the target from a "
+            "new angle.\n"
+            "Bad action: move_forward toward the blocked path or turn_right toward the same "
+            "obstacle.\n"
         )
         prompt_lines = [
             bearing_text,

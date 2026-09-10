@@ -7,9 +7,9 @@ from typing import Protocol
 
 import numpy as np
 
-from agentic_memory_nav.common.types import FrameObservation, MappingUpdate, ObjectObservation
 from agentic_memory_nav.agent.geometry.backprojection import backproject_mask
 from agentic_memory_nav.agent.geometry.pointcloud_store import PointCloudStore
+from agentic_memory_nav.common.types import FrameObservation, MappingUpdate, ObjectObservation
 
 
 @dataclass(slots=True)

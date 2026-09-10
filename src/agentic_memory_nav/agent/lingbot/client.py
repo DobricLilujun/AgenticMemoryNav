@@ -24,11 +24,10 @@ from __future__ import annotations
 import io
 import json
 import os
-import subprocess
 import select
+import subprocess
 import time
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 from PIL import Image
@@ -114,9 +113,7 @@ class LingBotMapAgentClient:
                 ready_line = self._process.stdout.readline()
                 break
         if not ready_line:
-            raise RuntimeError(
-                f"LingBot-Map agent exited during startup: {self._process.poll()}"
-            )
+            raise RuntimeError(f"LingBot-Map agent exited during startup: {self._process.poll()}")
         ready = json.loads(ready_line)
         if not ready.get("ready"):
             raise RuntimeError(f"LingBot-Map agent startup failed: {ready}")
@@ -126,7 +123,7 @@ class LingBotMapAgentClient:
         """Return True while the agent process is alive (used by the dispatcher)."""
         return self._process is not None and self._process.poll() is None
 
-    def __call__(self, frame: "FrameObservation") -> dict[str, object]:  # noqa: F821
+    def __call__(self, frame: FrameObservation) -> dict[str, object]:  # noqa: F821
         if self._process.stdin is None or self._process.stdout is None:
             raise RuntimeError("LingBot-Map agent pipes are unavailable")
         image_buffer = io.BytesIO()
@@ -203,7 +200,7 @@ def zlib_decompress(data: bytes) -> bytes:
     return zlib.decompress(data)
 
 
-def build_camera_to_world(frame: "FrameObservation") -> list[float]:  # noqa: F821
+def build_camera_to_world(frame: FrameObservation) -> list[float]:  # noqa: F821
     """Build the head optical-camera camera-to-world from robot pose + head extrinsics.
 
     Kept here (rather than in the preview script) so the sub-agent client is a single,
@@ -269,13 +266,13 @@ class SubAgentDispatcher:
             if not self.lingbot_client.is_ready():
                 raise RuntimeError("LingBot-Map agent is not ready after start")
 
-    def map_predictor(self) -> "LingBotPredictor":  # type: ignore[name-defined]
+    def map_predictor(self) -> LingBotPredictor:  # type: ignore[name-defined]  # noqa: F821
         """Return the map-agent client as the ``LingBotPredictor`` for the adapter."""
         if self.lingbot_client is None:
             raise RuntimeError("LingBot-Map agent was not started")
         return self.lingbot_client
 
-    def predict(self, frame: "FrameObservation") -> dict[str, object]:  # noqa: F821
+    def predict(self, frame: FrameObservation) -> dict[str, object]:  # noqa: F821
         if self.lingbot_client is None:
             raise RuntimeError("LingBot-Map agent was not started")
         return self.lingbot_client(frame)

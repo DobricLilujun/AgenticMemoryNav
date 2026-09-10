@@ -32,16 +32,20 @@ packages = ["src/agentic_memory_nav"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+norecursedirs = ["external-lib", "outputs", "notebooks", "build", "*.egg-info"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-# Notebook cells reference names bound in earlier cells at execution time; ruff's
-# per-cell analysis reports those as false-positive undefined names.
-extend-exclude = ["notebooks"]
+# Notebooks reference names bound in earlier cells; external-lib is third-party.
+extend-exclude = ["notebooks", "external-lib", "outputs", "build", "*.egg-info"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/agentic_memory_nav/agent/lingbot/*.py" = ["E402"]
+"src/agentic_memory_nav/visualization/realtime_pointcloud_viewer.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

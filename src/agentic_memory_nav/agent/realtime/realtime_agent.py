@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agentic_memory_nav.agent.planning.rule_based_fallback import RuleBasedPlanner
 from agentic_memory_nav.agent.realtime.memory_agent import MemoryAgent
 from agentic_memory_nav.agent.realtime.navigation_agent import NavigationAgent
 from agentic_memory_nav.common.types import FrameObservation, MappingUpdate, NavigationPlan, Pose3D
-from agentic_memory_nav.agent.planning.rule_based_fallback import RuleBasedPlanner
 
 
 @dataclass(frozen=True, slots=True)

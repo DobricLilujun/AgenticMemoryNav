@@ -40,4 +40,3 @@ class NumpyRGBDSequence:
                 source="numpy_rgbd",
                 provenance=[rgb_path.name],
             )
-

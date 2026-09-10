@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib
-import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -177,7 +176,7 @@ class TopDownMap:
 
         # Trajectory.
         if len(self.trajectory) > 1:
-            xs, ys = zip(*self.trajectory)
+            xs, ys = zip(*self.trajectory, strict=False)
             ax.plot(xs, ys, "b-", linewidth=1.5, alpha=0.7, label="Trajectory")
 
         # Landmarks.

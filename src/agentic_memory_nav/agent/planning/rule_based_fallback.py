@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from agentic_memory_nav.agent.planning.native_reasoner import NativeReasoner
 from agentic_memory_nav.common.types import (
     ActionIntent,
     ActionType,
@@ -12,7 +13,6 @@ from agentic_memory_nav.common.types import (
 )
 from agentic_memory_nav.memory.knowledge_memory import KnowledgeMemory
 from agentic_memory_nav.memory.sqlite_store import SQLiteMemory
-from agentic_memory_nav.agent.planning.native_reasoner import NativeReasoner
 from agentic_memory_nav.scene_graph.graph import SceneGraph
 
 
