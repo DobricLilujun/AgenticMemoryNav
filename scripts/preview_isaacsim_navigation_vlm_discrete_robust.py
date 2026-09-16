@@ -249,6 +249,7 @@ def main() -> int:
         turn_big_step_deg=args.turn_big_step_deg,
         move_step_m=args.move_step_m,
         look_step_deg=args.look_step_deg,
+        camera_offset=_as_vector3(execution.get("camera_offset"), "camera_offset"),
     )
 
     agent = _build_agent(config, instruction, args.max_look_count)

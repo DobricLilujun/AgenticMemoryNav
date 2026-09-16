@@ -13,13 +13,17 @@ Supported constraints:
 from __future__ import annotations
 
 import importlib.util
+import logging
 import math
+import os
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+_logger = logging.getLogger(__name__)
 
 from agentic_memory_nav.agent.execution.discrete_actions import (
     LOOK_PITCH_LIMIT_RAD,
@@ -52,8 +56,18 @@ _OPTICAL_TO_BASE_OFFSET_WXYZ = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 # Camera-link translation in base_link coordinates: (forward, left, up), metres.
 _GO2_BASE_HEIGHT_M = 0.40
 _GO2_CAMERA_OFFSET_M = (0.25, 0.0, 0.20)
+# Full body half extents used for placement validation feedback only.
 _GO2_STANDING_HALF_EXTENTS_M = (0.34, 0.20, 0.30)
+# Torso-level half extents for movement checks. The feet must be allowed to
+# touch/intersect the floor mesh, otherwise every forward step is reported as
+# an obstacle.
+_GO2_TORSO_HALF_EXTENTS_M = (0.34, 0.20, 0.10)
 _CUBOID_BASE_HEIGHT_M = 0.15
+
+# Swept collision-check spacing: sample the movement segment so thin walls
+# cannot be stepped through. Keeps the check cheap (< 10 overlap queries).
+_SWEPT_CHECK_SAMPLE_SPACING_M = 0.05
+_SWEPT_CHECK_MAX_SAMPLES = 5
 
 
 def _normalize_quat_wxyz(quaternion: np.ndarray) -> np.ndarray:
@@ -152,7 +166,10 @@ def _ensure_simulation_app(
         if livestream_args is not None:
             # The trimmed-down "base.python" experience has no WebRTC livestream
             # extension; the full streaming experience is required to serve a stream.
-            experience = str(Path("~/isaacsim/apps/isaacsim.exp.full.streaming.kit").expanduser())
+            isaacsim_path = os.environ.get("ISAACSIM_PATH", "")
+            if not isaacsim_path:
+                isaacsim_path = Path("~/IsaacSim/_build/linux-aarch64/release").expanduser()
+            experience = str(Path(isaacsim_path) / "apps" / "isaacsim.exp.full.streaming.kit")
             config: dict[str, Any] = {
                 "headless": headless,
                 "hide_ui": False,
@@ -230,6 +247,7 @@ class IsaacSimExecutor:
         turn_big_step_deg: float | None = None,
         move_step_m: float | None = None,
         look_step_deg: float | None = None,
+        camera_offset: Vector3 | None = None,
     ) -> None:
         if importlib.util.find_spec("isaacsim") is None:
             raise RuntimeError("isaacsim is not importable in this Python environment")
@@ -359,7 +377,11 @@ class IsaacSimExecutor:
 
             self._base_height = _GO2_BASE_HEIGHT_M
             self._robot_prim_path = "/World/robot"
-            camera_offset = np.array(_GO2_CAMERA_OFFSET_M, dtype=np.float32)
+            camera_offset = (
+                np.array(_xyz_degrees(camera_offset, "camera_offset"), dtype=np.float32)
+                if camera_offset is not None
+                else np.array(_GO2_CAMERA_OFFSET_M, dtype=np.float32)
+            )
             add_reference_to_stage(self.robot_usd, "/World/robot")
             _freeze_articulation(self._world.stage, "/World/robot")
             self._robot = SingleXFormPrim(
@@ -789,89 +811,53 @@ class IsaacSimExecutor:
             points = mesh.GetPointsAttr().Get()
             if not points:
                 continue
-
-            # Heuristic: InternScenes room shells are simple boxes that occupy
-            # the whole scene volume. Treating them as solid blocks navigation.
-            if self._is_room_shell_mesh(prim, points):
-                room_shell_paths.append(str(prim.GetPath()))
-                continue
+            name = str(prim.GetName())
+            path = str(prim.GetPath())
 
             pts = np.asarray(points)
             lower = pts.min(axis=0)
             upper = pts.max(axis=0)
             sizes = upper - lower
             volume = float(np.prod(sizes))
-            # Skip degenerate or flat planes used as floor/ceiling; we add our
-            # own thin slab colliders from the scene bounds instead. Keeping
-            # these meshes as colliders makes the robot permanently overlap the
-            # floor and can produce invalid PhysX geometry warnings.
-            if volume < 0.01 or np.any(sizes < 0.005):
+
+            # Heuristic: InternScenes room shells are simple boxes that occupy
+            # the whole scene volume. Treating them as solid blocks navigation.
+            if self._is_room_shell_mesh(prim, pts):
+                room_shell_paths.append(path)
+                continue
+
+            # Skip floor/ceiling slabs. A vertical wall has a large Z extent;
+            # a floor/ceiling has a very small Z extent relative to its
+            # horizontal span. Using a 10 cm threshold catches typical floors
+            # while leaving walls and furniture collidable.
+            if sizes[2] < 0.10 or sizes[2] / max(max(sizes[0], sizes[1]), 1e-6) < 0.05:
                 continue
 
             self._apply_mesh_collision(prim)
 
-        if room_shell_paths:
-            self._add_hollow_room_colliders_from_bounds()
+        # Always add a bounds shell as a safety net. If no room shell was found
+        # this prevents the robot from walking out of the scene entirely; if a
+        # room shell was found the bounds shell is added in addition to the
+        # detected shell for redundancy.
+        self._add_hollow_room_colliders_from_bounds()
 
     def _apply_mesh_collision(self, prim: Any) -> None:
-        """Apply a PhysX collision API to a mesh, falling back to a bounding box.
-
-        Some imported meshes (e.g. thin paper-like objaverse objects) contain
-        degenerate triangles that PhysX cannot turn into a convex/deformable
-        shape. We first try the default mesh collision; if that fails we create
-        a hidden box collider matching the mesh bounds so the object still
-        blocks navigation without spamming PhysX errors.
-        """
-        from pxr import UsdGeom, UsdPhysics  # type: ignore[import-not-found]
-
-        mesh = UsdGeom.Mesh(prim)
-        points = mesh.GetPointsAttr().Get()
-        if not points:
-            return
-
-        pts = np.asarray(points)
-        lower = pts.min(axis=0)
-        upper = pts.max(axis=0)
-        sizes = upper - lower
-        center = (lower + upper) * 0.5
-        half_extents = sizes * 0.5
-
-        # Skip applying CollisionAPI directly if the mesh is obviously flat or
-        # degenerate; go straight to a bounding-box proxy.
-        if float(np.prod(sizes)) < 0.001 or np.any(sizes < 0.001):
-            proxy_path = f"{prim.GetPath()}_collision_proxy"
-            self._add_box_mesh_collider(
-                str(proxy_path),
-                (float(center[0]), float(center[1]), float(center[2])),
-                (
-                    max(float(half_extents[0]), 0.005),
-                    max(float(half_extents[1]), 0.005),
-                    max(float(half_extents[2]), 0.005),
-                ),
-            )
-            return
+        """Apply a PhysX collision API to a mesh."""
+        from pxr import UsdPhysics  # type: ignore[import-not-found]
 
         UsdPhysics.CollisionAPI.Apply(prim)
-
-        # Trigger an immediate cooking attempt by setting approximation hint.
-        # If the mesh still cannot be cooked, PhysX warnings are emitted but
-        # navigation is not completely broken because we keep the fallback
-        # room-shell colliders around the outside.
         try:
             mesh_collision = UsdPhysics.MeshCollisionAPI.Apply(prim)
             mesh_collision.CreateApproximationAttr().Set("convexDecomposition")
         except Exception:
             pass
 
-    def _is_room_shell_mesh(self, prim: Any, points: Any) -> bool:
+    def _is_room_shell_mesh(self, prim: Any, pts: np.ndarray) -> bool:
         """Detect solid room bounding-box meshes from InternScenes conversions."""
-        import numpy as np
-
         name = str(prim.GetName())
         if not (name.startswith("world_") or name.startswith("geometry_")):
             return False
-        pts = np.asarray(points)
-        if pts.shape[0] < 8 or pts.shape[0] > 500:
+        if pts.shape[0] < 8:
             return False
         lower = pts.min(axis=0)
         upper = pts.max(axis=0)
@@ -879,15 +865,22 @@ class IsaacSimExecutor:
         if np.any(sizes <= 0.0):
             return False
         volume = float(np.prod(sizes))
-        # A room shell is big (tens of cubic metres) and box-like (aspect ratio
-        # not extreme). The robot standing volume is ~0.3*0.4*0.6 = 0.07 m^3.
-        return bool(volume > 5.0 and np.all(sizes > 0.3))
+        # A room shell is big (tens of cubic metres) and box-like. Allow more
+        # vertices than a perfect cube because some conversions tessellate the
+        # six faces. Also compare against the authored scene bounds: if the mesh
+        # spans the whole environment it is the room shell, not furniture.
+        if volume <= 5.0 or np.any(sizes < 0.3):
+            return False
+        env_lower, env_upper = self._environment_bounds
+        env_sizes = env_upper - env_lower
+        spans_env = np.all(sizes >= env_sizes * 0.85)
+        return bool(pts.shape[0] <= 2000 or spans_env)
 
     def _add_hollow_room_colliders_from_bounds(self) -> None:
         """Add six thin box colliders for walls/floor/ceiling around /World/scene."""
 
         lower, upper = self._environment_bounds
-        thickness = 0.05
+        thickness = 0.2
         x_mid = (float(lower[0]) + float(upper[0])) / 2.0
         y_mid = (float(lower[1]) + float(upper[1])) / 2.0
         z_mid = (float(lower[2]) + float(upper[2])) / 2.0
@@ -1014,15 +1007,29 @@ class IsaacSimExecutor:
         body.CreateRigidBodyEnabledAttr(True)
 
     def _validate_robot_placement(self) -> None:
-        """Abort before the loop when the Go2 standing volume intersects the environment."""
+        """Abort before the loop when the robot torso intersects walls/furniture.
+
+        Standing on the floor is expected, so the vertical check height is
+        shrunk to torso level only. This avoids false positives where the
+        robot's feet briefly intersect the authored floor mesh.
+        """
         position, _ = self._robot.get_world_pose()
-        hits = self._environment_overlap_hits(position, self._yaw)
+        hits = self._environment_overlap_hits(
+            position,
+            self._yaw,
+            half_extents=(0.34, 0.20, 0.05),
+        )
         if hits:
             raise RuntimeError(
-                "Go2 initial placement overlaps environment colliders: " + ", ".join(hits[:5])
+                "Robot initial placement overlaps environment colliders: " + ", ".join(hits[:5])
             )
 
-    def _environment_overlap_hits(self, position: np.ndarray, yaw: float) -> list[str]:
+    def _environment_overlap_hits(
+        self,
+        position: np.ndarray,
+        yaw: float,
+        half_extents: tuple[float, float, float] | None = None,
+    ) -> list[str]:
         import carb  # type: ignore[import-not-found]
         from omni.physx import get_physx_scene_query_interface  # type: ignore[import-not-found]
 
@@ -1041,7 +1048,9 @@ class IsaacSimExecutor:
             hits.append(collider)
             return True
 
-        half_x, half_y, half_z = _GO2_STANDING_HALF_EXTENTS_M
+        if half_extents is None:
+            half_extents = _GO2_TORSO_HALF_EXTENTS_M
+        half_x, half_y, half_z = half_extents
         half_yaw = yaw * 0.5
         get_physx_scene_query_interface().overlap_box(
             carb.Float3(half_x, half_y, half_z),
@@ -1052,10 +1061,37 @@ class IsaacSimExecutor:
         )
         return sorted(set(hits))
 
-    def _can_move_to(self, position: np.ndarray, yaw: float) -> tuple[bool, str]:
+    def _can_move_to(
+        self,
+        position: np.ndarray,
+        yaw: float,
+        from_position: np.ndarray | None = None,
+    ) -> tuple[bool, str]:
+        """Check the destination pose and a few samples along the path.
+
+        A single overlap test at the destination can miss thin walls whose
+        thickness is smaller than the movement step. Sampling the travelled
+        segment catches those cases while still being cheap (at most
+        ``_SWEPT_CHECK_MAX_SAMPLES`` extra queries).
+        """
         hits = self._environment_overlap_hits(position, yaw)
         if hits:
             return False, "collision predicted with " + ", ".join(hits[:3])
+
+        if from_position is not None:
+            delta = position - from_position
+            horizontal_distance = float(np.linalg.norm(delta[:2]))
+            if horizontal_distance > 1e-6:
+                num_substeps = min(
+                    _SWEPT_CHECK_MAX_SAMPLES,
+                    max(1, int(horizontal_distance / _SWEPT_CHECK_SAMPLE_SPACING_M)),
+                )
+                for i in range(1, num_substeps + 1):
+                    t = i / (num_substeps + 1)
+                    sample_pos = from_position + delta * t
+                    hits = self._environment_overlap_hits(sample_pos, yaw)
+                    if hits:
+                        return False, "collision predicted with " + ", ".join(hits[:3])
         return True, "clear"
 
     def _add_procedural_obstacles(self) -> None:
@@ -1211,7 +1247,7 @@ class IsaacSimExecutor:
         )
         yaw = self._yaw + wz * self.dt
 
-        can_move, message = self._can_move_to(destination, yaw)
+        can_move, message = self._can_move_to(destination, yaw, from_position=position)
         if not can_move:
             self.stop()
             self._collision = True
@@ -1295,7 +1331,9 @@ class IsaacSimExecutor:
                 ],
                 dtype=np.float32,
             )
-            can_move, message = self._can_move_to(destination, self._yaw)
+            can_move, message = self._can_move_to(
+                destination, self._yaw, from_position=position
+            )
             if not can_move:
                 self.stop()
                 self._collision = True

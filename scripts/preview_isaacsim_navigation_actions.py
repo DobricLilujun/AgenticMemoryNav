@@ -219,6 +219,7 @@ def main() -> int:
         environment_planes=dict(execution.get("environment_planes", {})),
         robot_motion_mode=str(execution.get("robot_motion_mode", "kinematic")),
         light_rig=str(execution.get("light_rig", "gray_studio")),
+        camera_offset=_as_vector3(execution.get("camera_offset"), "camera_offset"),
     )
 
     print("\n=== Standard 6-Action Control ===")

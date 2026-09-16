@@ -233,6 +233,7 @@ def main() -> int:
         turn_big_step_deg=args.turn_big_step_deg,
         move_step_m=args.move_step_m,
         look_step_deg=args.look_step_deg,
+        camera_offset=_as_vector3(execution.get("camera_offset"), "camera_offset"),
     )
 
     # Initialize the 2D top-down memory map to cover a 20x20 m room.
