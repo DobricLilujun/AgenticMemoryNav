@@ -1,11 +1,14 @@
 """Smoke tests for core agent primitives."""
 
+from pathlib import Path
+
 from agentic_memory_nav.agent.execution.discrete_actions import (
     ACTION_BY_ID,
     DiscreteAction,
     parse_discrete_action,
 )
 from agentic_memory_nav.agent.planning.task_parser import RuleBasedTaskParser
+from agentic_memory_nav.common.config import AppConfig
 from agentic_memory_nav.scene_graph.graph import SceneGraph
 
 
@@ -34,3 +37,9 @@ def test_scene_graph_starts_empty() -> None:
     graph = SceneGraph()
     assert graph.nodes() == []
     assert graph.edges() == []
+
+
+def test_config_resolves_repo_relative_paths(tmp_path: Path) -> None:
+    config = AppConfig({}, tmp_path / "configs" / "test.yaml")
+    assert config.resolve_path("assets/scene.usd") == str((tmp_path / "assets/scene.usd").resolve())
+    assert config.resolve_path("omniverse://server/scene.usd") == "omniverse://server/scene.usd"

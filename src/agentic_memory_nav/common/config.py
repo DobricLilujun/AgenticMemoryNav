@@ -20,6 +20,20 @@ class AppConfig:
             raise ValueError(f"Configuration section {name!r} must be a mapping")
         return value
 
+    def resolve_path(self, value: str | Path | None) -> str | None:
+        """Resolve local paths relative to the directory containing this config."""
+        if value is None:
+            return None
+        text = str(value)
+        if "://" in text:
+            return text
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            config_relative = self.source.parent / path
+            project_relative = self.source.parent.parent / path
+            path = config_relative if config_relative.exists() else project_relative
+        return str(path.resolve())
+
 
 def load_config(path: str | Path) -> AppConfig:
     source = Path(path).expanduser().resolve()

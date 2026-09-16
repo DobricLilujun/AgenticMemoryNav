@@ -69,7 +69,9 @@ def _parse_robot_start_pose(
     raise ValueError(f"{name} must be a position or a mapping")
 
 
-def _load_scene_go2_placement(scene_path: str | Path) -> tuple[tuple[float, float, float] | None, float]:
+def _load_scene_go2_placement(
+    scene_path: str | Path,
+) -> tuple[tuple[float, float, float] | None, float]:
     scene_file = Path(scene_path).expanduser()
     if not scene_file.exists():
         return None, 0.0
@@ -164,7 +166,8 @@ def main() -> int:
     args = parse_args()
     config = load_config(args.config)
     execution = config.section("execution")
-    scene_path = execution.get("scene")
+    scene_path = config.resolve_path(execution.get("scene"))
+    robot_usd = config.resolve_path(execution.get("robot_usd"))
     robot_start, robot_yaw_deg = _parse_robot_start_pose(
         execution.get("robot_start"), "robot_start"
     )
@@ -214,7 +217,7 @@ def main() -> int:
         max_timeout=float(execution.get("max_action_timeout", 20.0)),
     )
     executor = IsaacSimExecutor(
-        scene=execution.get("scene"),
+        scene=scene_path,
         safety=safety,
         max_speed=float(execution.get("max_speed", 0.35)),
         camera_resolution=(
@@ -227,7 +230,7 @@ def main() -> int:
             int(execution.get("stream_width", 1280)),
             int(execution.get("stream_height", 720)),
         ),
-        robot_usd=execution.get("robot_usd"),
+        robot_usd=robot_usd,
         bind_viewport_to_camera=bool(execution.get("bind_viewport_to_camera", True)),
         scene_up_axis=str(execution.get("scene_up_axis", "z")),
         go2_camera_orient=_as_vector3(execution.get("go2_camera_orient"), "go2_camera_orient"),
