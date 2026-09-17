@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MCP Infinite Canvas</title>
+<style>
+  :root {
+    --bg:#f4f6f8; --panel:#ffffff; --panel2:#f0f3f6; --line:#d9dee4;
+    --fg:#24292f; --muted:#6a727d; --accent:#388bfd; --green:#2ca02c;
+    --red:#d62728; --amber:#d29922;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    background:var(--bg); color:var(--fg); display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+  header { display:flex; align-items:center; gap:14px; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header .sub { color:var(--muted); font-size:12px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#9aa4b0; }
+  .dot.on { background:var(--green); box-shadow:0 0 8px var(--green); }
+  .dot.off { background:var(--red); }
+  .status { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+  .spacer { flex:1; }
+  .metrics { display:flex; gap:18px; font-size:12px; color:var(--muted); }
+  .metrics b { color:var(--fg); font-weight:600; }
+  main { flex:1; display:flex; min-height:0; }
+  #canvasWrap { flex:1; position:relative; background:#ffffff; }
+  canvas { display:block; width:100%; height:100%; }
+  aside { width:300px; background:var(--panel); border-left:1px solid var(--line); padding:14px; overflow-y:auto; display:flex; flex-direction:column; gap:14px; }
+  .card { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .card h2 { font-size:12px; margin:0 0 10px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; }
+  .actions { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .actions button { padding:8px 4px; font-size:11px; cursor:pointer; border-radius:7px; background:#ffffff; color:var(--fg); border:1px solid var(--line); }
+  .actions button:hover { border-color:var(--accent); background:#eef4ff; }
+  .actions .move { color:var(--green); } .actions .rotate { color:var(--accent); } .actions .noop { color:var(--muted); }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  .row button { flex:1; padding:8px; font-size:12px; cursor:pointer; border-radius:7px; background:#ffffff; color:var(--fg); border:1px solid var(--line); }
+  .row button:hover { border-color:var(--accent); }
+  .row button.danger { color:var(--red); }
+  label { font-size:11px; color:var(--muted); display:block; margin:8px 0 3px; }
+  input,select { width:100%; background:#ffffff; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:12px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .log { font-family:ui-monospace,monospace; font-size:11px; line-height:1.5; max-height:180px; overflow-y:auto; }
+  .log .ev { padding:2px 0; border-bottom:1px solid #e2e7ec; }
+  .log .ev b { color:var(--accent); }
+  .ev.trajectory_added b { color:var(--fg); } .ev.robot_updated b { color:var(--green); }
+  .ev.obstacle_added b,.ev.obstacle_updated b { color:var(--amber); }
+  .legend { font-size:11px; color:var(--muted); line-height:1.8; }
+  .legend i { display:inline-block; width:16px; height:3px; vertical-align:middle; margin-right:6px; }
+  .kbd { display:inline-block; min-width:20px; padding:1px 5px; border:1px solid var(--line); border-radius:5px; background:#ffffff; font-family:ui-monospace,monospace; font-size:11px; text-align:center; margin:1px; }
+  .row button.active { border-color:#17becf; color:#17becf; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MCP Infinite Canvas</h1>
+  <span class="sub">real-time 2D robot &middot; abstract unit length</span>
+  <span class="status"><span class="dot" id="dot"></span><span id="wsState">connecting&hellip;</span></span>
+  <div class="spacer"></div>
+  <div class="metrics">
+    <div>pose <b id="mPose">0, 0 &middot; 0&deg;</b></div>
+    <div>trajectory <b id="mTraj">0</b></div>
+    <div>obstacles <b id="mObs">0</b></div>
+    <div>version <b id="mVer">0</b></div>
+  </div>
+</header>
+<main>
+  <div id="canvasWrap"><canvas id="canvas"></canvas></div>
+  <aside>
+    <div class="card">
+      <h2>Robot actions</h2>
+      <div class="actions" id="actions"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="reset">Reset</button>
+        <button id="clear" class="danger">Clear events</button>
+      </div>
+      <div style="margin-top:8px; font-size:11px; color:var(--muted); line-height:1.7">
+        <span class="kbd">W</span>/<span class="kbd">S</span> move &middot;
+        <span class="kbd">A</span>/<span class="kbd">D</span> turn 15&deg; &middot;
+        <span class="kbd">Q</span>/<span class="kbd">E</span> turn 90&deg;
+      </div>
+    </div>
+    <div class="card">
+      <h2>View mode</h2>
+      <div class="row">
+        <button id="modeGlobal" class="active">Global</button>
+        <button id="modeFollow">Follow</button>
+      </div>
+      <label>Follow zoom (units visible around the robot)</label>
+      <input id="followRadius" type="number" step="1" min="1" value="15" />
+    </div>
+    <div class="card">
+      <h2>Add square obstacle</h2>
+      <div class="grid2">
+        <div><label>center x</label><input id="oX" type="number" step="0.1" value="1.0" /></div>
+        <div><label>center y</label><input id="oY" type="number" step="0.1" value="0.0" /></div>
+      </div>
+      <div class="grid2">
+        <div><label>size (unit)</label><input id="oSize" type="number" step="0.1" value="2.0" /></div>
+        <div><label>state</label><select id="oState"><option value="confirmed">confirmed</option><option value="perceived">perceived</option></select></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input id="oLabel" style="flex:2" placeholder="label (optional)" />
+        <button id="addObs" style="flex:1">Add</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Legend</h2>
+      <div class="legend">
+        <div><i style="background:#17becf"></i> robot (cyan)</div>
+        <div><i style="background:#1f77b4"></i> latest trajectory (solid)</div>
+        <div><i style="background:#9e9e9e"></i> past trajectory (dashed)</div>
+        <div><i style="background:#d62728"></i> blocked move (red)</div>
+        <div><i style="background:#e74c3c"></i> confirmed obstacle</div>
+        <div><i style="background:#e74c3c; opacity:.4"></i> perceived obstacle (dashed)</div>
+      </div>
+    </div>
+    <div class="card"><h2>Events</h2><div class="log" id="log"></div></div>
+  </aside>
+</main>
+<script>
+const ROBOT_ID = "robot_0";
+const ACTIONS = [
+  {name:"turn_left", kind:"rotate"}, {name:"turn_right", kind:"rotate"},
+  {name:"move_forward", kind:"move"}, {name:"turn_left_big", kind:"rotate"},
+  {name:"turn_right_big", kind:"rotate"}, {name:"move_backward", kind:"move"},
+  {name:"stop", kind:"noop"}, {name:"look_up", kind:"noop"}, {name:"look_down", kind:"noop"},
+];
+
+let canvasState = null;
+let scale = 150; // pixels per unit length (uniform -> relative positions preserved)
+let panX = 0, panY = 0; // pan offset in pixels
+let viewMode = "global"; // "global" auto-fits the world, "follow" zooms to the robot
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  applyView();
+  draw();
+}
+window.addEventListener("resize", resize);
+
+// origin centered + pan offset; y-up (theta=0 faces +x)
+function toPx(x, y) {
+  return [canvas.clientWidth / 2 + panX + x * scale, canvas.clientHeight / 2 + panY - y * scale];
+}
+
+// Bounding box over everything visible (used by the global view).
+function worldBounds() {
+  let xs = [0], ys = [0];
+  for (const r of (canvasState?.robots || [])) { xs.push(r.position[0]); ys.push(r.position[1]); }
+  for (const s of (canvasState?.trajectory || [])) {
+    xs.push(s.start[0], s.end[0]); ys.push(s.start[1], s.end[1]);
+  }
+  for (const o of (canvasState?.obstacles || [])) {
+    if ((o.properties || {}).visible === false) continue;
+    for (const p of (o.geometry || [])) { xs.push(p[0]); ys.push(p[1]); }
+    if (o.position) { xs.push(o.position[0]); ys.push(o.position[1]); }
+  }
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const ymin = Math.min(...ys), ymax = Math.max(...ys);
+  const pad = Math.max(xmax - xmin, ymax - ymin, 1) * 0.15 + 0.4;
+  return [xmin - pad, xmax + pad, ymin - pad, ymax + pad];
+}
+
+function applyView() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (viewMode === "follow") {
+    const r = canvasState?.robots?.[0];
+    const radius = parseFloat(document.getElementById("followRadius").value) || 15;
+    scale = Math.min(w, h) / (radius * 2);
+    if (r) {
+      panX = -r.position[0] * scale;
+      panY = r.position[1] * scale;
+    }
+  } else {
+    const [xmin, xmax, ymin, ymax] = worldBounds();
+    const ww = Math.max(xmax - xmin, 0.1), hh = Math.max(ymax - ymin, 0.1);
+    scale = Math.min(w / ww, h / hh) * 0.95;
+    panX = -(xmin + ww / 2) * scale;
+    panY = (ymin + hh / 2) * scale;
+  }
+}
+
+function draw() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  ctx.clearRect(0, 0, w, h);
+  drawGrid();
+  if (canvasState) {
+    drawTrajectory(canvasState.trajectory || []);
+    drawObstacles(canvasState.obstacles || []);
+    drawRobots(canvasState.robots || []);
+  }
+}
+
+function drawGrid() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const [cx, cy] = toPx(0, 0);
+  ctx.strokeStyle = "#e3e8ee"; ctx.lineWidth = 1;
+  for (let i = Math.ceil(-cx / scale); i <= Math.floor((w - cx) / scale); i++) {
+    ctx.globalAlpha = (i % 5 === 0) ? 0.7 : 0.35;
+    ctx.beginPath(); ctx.moveTo(cx + i * scale, 0); ctx.lineTo(cx + i * scale, h); ctx.stroke();
+  }
+  for (let j = Math.ceil((cy - h) / scale); j <= Math.floor(cy / scale); j++) {
+    ctx.globalAlpha = (j % 5 === 0) ? 0.7 : 0.35;
+    ctx.beginPath(); ctx.moveTo(0, cy - j * scale); ctx.lineTo(w, cy - j * scale); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawTrajectory(segs) {
+  const last = segs.length - 1;
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i];
+    const color = s.success === false ? "#d62728" : (i === last ? "#1f77b4" : "#9e9e9e");
+    const [x1, y1] = toPx(s.start[0], s.start[1]);
+    const [x2, y2] = toPx(s.end[0], s.end[1]);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = i === last ? 3 : 2;
+    ctx.setLineDash(i === last ? [] : [6, 5]);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    // direction arrowhead on the segment
+    const segLen = Math.hypot(x2 - x1, y2 - y1);
+    if (segLen > 12) {
+      const ux = (x2 - x1) / segLen, uy = (y2 - y1) / segLen;
+      const px = x1 + (x2 - x1) * 0.65, py = y1 + (y2 - y1) * 0.65;
+      const ah = Math.min(9, segLen * 0.22);
+      ctx.setLineDash([]);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(px + ux * ah, py + uy * ah);
+      ctx.lineTo(px - uy * ah * 0.55, py + ux * ah * 0.55);
+      ctx.lineTo(px + uy * ah * 0.55, py - ux * ah * 0.55);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  ctx.setLineDash([]);
+}
+
+function drawObstacles(obs) {
+  // Group line segments that belong to the same logical square obstacle.
+  const groups = {};
+  const singles = [];
+  for (const o of obs) {
+    const props = o.properties || {};
+    if (props.visible === false) continue; // hidden world obstacles are not drawn
+    const isLine = (o.obstacle_type || o.type) === "line";
+    if (isLine && props.group_id) {
+      (groups[props.group_id] = groups[props.group_id] || []).push(o);
+    } else {
+      singles.push(o);
+    }
+  }
+  // Render grouped squares (four sides) as one polygon.
+  for (const gid of Object.keys(groups)) {
+    const members = groups[gid];
+    const confirmed = (members[0].properties || {}).confirmed !== false;
+    const pts = [];
+    for (const m of members) {
+      const geom = m.geometry || [];
+      if (geom.length >= 2) { pts.push(geom[0], geom[1]); }
+    }
+    if (!pts.length) continue;
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const half = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 2;
+    const [px, py] = toPx(cx - half, cy + half);
+    const size = 2 * half * scale;
+    if (confirmed) {
+      ctx.fillStyle = "rgba(231,76,60,0.15)";
+      ctx.fillRect(px, py, size, size);
+      ctx.strokeStyle = "#e74c3c"; ctx.lineWidth = 1.5;
+      ctx.strokeRect(px, py, size, size);
+    } else {
+      ctx.strokeStyle = "rgba(231,76,60,0.55)"; ctx.lineWidth = 1.2;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(px, py, size, size);
+      ctx.setLineDash([]);
+    }
+  }
+  for (const o of singles) {
+    const props = o.properties || {};
+    const confirmed = props.confirmed !== false;
+    const isLine = (o.obstacle_type || o.type) === "line";
+    ctx.strokeStyle = "#e74c3c"; ctx.fillStyle = "#e74c3c";
+    if (isLine) {
+      const [x1, y1] = toPx(o.geometry[0][0], o.geometry[0][1]);
+      const [x2, y2] = toPx(o.geometry[1][0], o.geometry[1][1]);
+      ctx.lineWidth = Math.max(2, (o.width || 0.05) * scale); ctx.lineCap = "round";
+      if (!confirmed) { ctx.globalAlpha = 0.45; ctx.setLineDash([5, 4]); }
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      ctx.globalAlpha = 1; ctx.setLineDash([]);
+    } else {
+      const [cx, cy] = toPx(o.position[0], o.position[1]);
+      const r = Math.max(4, (o.radius || 0.2) * scale);
+      ctx.globalAlpha = confirmed ? 0.18 : 0.08;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = confirmed ? 1 : 0.45; ctx.lineWidth = 1.5;
+      if (!confirmed) ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      ctx.globalAlpha = 1; ctx.setLineDash([]);
+    }
+    if (o.label) {
+      const [cx, cy] = toPx(o.position[0], o.position[1]);
+      ctx.fillStyle = "#b07503"; ctx.font = "10px ui-sans-serif"; ctx.textAlign = "center";
+      ctx.fillText(o.label, cx, cy - 8);
+    }
+  }
+}
+
+function drawRobots(robots) {
+  for (const r of robots) {
+    const [cx, cy] = toPx(r.position[0], r.position[1]);
+    const theta = (r.theta || 0) * Math.PI / 180;
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(-theta);
+    ctx.fillStyle = r.active === false ? "#8b98a9" : "#17becf";
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(13, 0); ctx.lineTo(-9, 9); ctx.lineTo(-9, -9); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = "#6a727d"; ctx.font = "10px ui-sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(r.robot_id, cx, cy - 14);
+  }
+}
+
+// ---- control: the HMI drives the robot over HTTP; the fake robot uses MCP ----
+async function post(path, body) {
+  try {
+    await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch (e) { console.warn("control error", e); }
+}
+
+const actionsEl = document.getElementById("actions");
+for (const a of ACTIONS) {
+  const b = document.createElement("button");
+  b.className = a.kind; b.textContent = a.name;
+  b.onclick = () => post("/api/execute_action", { robot_id: ROBOT_ID, action: a.name });
+  actionsEl.appendChild(b);
+}
+document.getElementById("reset").onclick = () => post("/api/reset", { robot_id: ROBOT_ID });
+document.getElementById("clear").onclick = () => post("/api/reset", { robot_id: ROBOT_ID, clear_events: true });
+
+// Square obstacle: four line sides sharing one group_id.
+document.getElementById("addObs").onclick = () => {
+  const cx = parseFloat(document.getElementById("oX").value) || 0;
+  const cy = parseFloat(document.getElementById("oY").value) || 0;
+  const size = parseFloat(document.getElementById("oSize").value) || 0.12;
+  const half = size / 2;
+  const confirmed = document.getElementById("oState").value === "confirmed";
+  const label = document.getElementById("oLabel").value || "";
+  const group = "sq_" + Date.now();
+  const sides = [
+    [[cx - half, cy - half], [cx + half, cy - half]],
+    [[cx + half, cy - half], [cx + half, cy + half]],
+    [[cx + half, cy + half], [cx - half, cy + half]],
+    [[cx - half, cy + half], [cx - half, cy - half]],
+  ];
+  for (const [start, end] of sides) {
+    post("/api/add_obstacle", { robot_id: ROBOT_ID, obstacle: {
+      obstacle_type: "line",
+      geometry: { start, end },
+      width: 0.02, label,
+      properties: { group_id: group, confirmed },
+    } });
+  }
+};
+
+// ---- transport: WebSocket primary + polling fallback ----
+const dot = document.getElementById("dot");
+const wsState = document.getElementById("wsState");
+function connect() {
+  const proto = location.protocol === "https" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws/canvas/main`);
+  ws.onopen = () => { dot.className = "dot on"; wsState.textContent = "live"; };
+  ws.onclose = () => { dot.className = "dot off"; wsState.textContent = "reconnecting\u2026"; setTimeout(connect, 1200); };
+  ws.onmessage = (m) => {
+    let msg; try { msg = JSON.parse(m.data); } catch { return; }
+    if (msg.type === "snapshot") { canvasState = msg.canvas; render(); }
+    else if (msg.type === "event") { applyEvent(msg.event); }
+  };
+}
+
+function applyEvent(ev) {
+  if (!canvasState) return;
+  const d = ev.data || {};
+  if (ev.event === "robot_updated") {
+    const robot = d.robot;
+    if (robot) {
+      const r = canvasState.robots.find((x) => x.robot_id === d.robot_id);
+      if (r) { r.position = robot.position; r.theta = robot.theta; r.active = robot.active; }
+    }
+  } else if (ev.event === "trajectory_added") {
+    const seg = d.segment;
+    if (seg && !canvasState.trajectory.some((s) => s.segment_id === seg.segment_id)) {
+      canvasState.trajectory.push(seg);
+      canvasState.trajectory_count = canvasState.trajectory.length;
+    }
+    // A move event also carries the robot's new pose; without this the robot
+    // marker would only update on rotation (robot_updated) events.
+    const robot = d.robot;
+    if (robot) {
+      const r = canvasState.robots.find((x) => x.robot_id === d.robot_id);
+      if (r) { r.position = robot.position; r.theta = robot.theta; r.active = robot.active; }
+    }
+  } else if (ev.event === "obstacle_added") {
+    const o = d.obstacle;
+    if (o && !canvasState.obstacles.some((x) => x.obstacle_id === o.obstacle_id)) {
+      canvasState.obstacles.push(o);
+    }
+  } else if (ev.event === "obstacle_updated") {
+    const o = d.obstacle;
+    if (o) {
+      const i = canvasState.obstacles.findIndex((x) => x.obstacle_id === o.obstacle_id);
+      if (i >= 0) canvasState.obstacles[i] = o;
+    }
+  } else if (ev.event === "obstacle_removed") {
+    canvasState.obstacles = canvasState.obstacles.filter((x) => x.obstacle_id !== d.obstacle_id);
+  }
+  // simulation_reset: the fresh canvas arrives via the snapshot / polling fallback.
+  canvasState.version = ev.canvas_version;
+  render();
+}
+
+function render() { applyView(); draw(); updateHud(); }
+
+// view-mode buttons
+const modeGlobal = document.getElementById("modeGlobal");
+const modeFollow = document.getElementById("modeFollow");
+modeGlobal.onclick = () => { viewMode = "global"; modeGlobal.classList.add("active"); modeFollow.classList.remove("active"); render(); };
+modeFollow.onclick = () => { viewMode = "follow"; modeFollow.classList.add("active"); modeGlobal.classList.remove("active"); render(); };
+document.getElementById("followRadius").onchange = () => { if (viewMode === "follow") render(); };
+
+function updateHud() {
+  if (!canvasState) return;
+  const r = canvasState.robots[0];
+  document.getElementById("mPose").textContent =
+    r ? `${r.position[0].toFixed(2)}, ${r.position[1].toFixed(2)} \u00b7 ${Math.round(r.theta)}\u00b0` : "\u2014";
+  document.getElementById("mTraj").textContent = canvasState.trajectory_count ?? 0;
+  document.getElementById("mObs").textContent = (canvasState.obstacles || []).length;
+  document.getElementById("mVer").textContent = canvasState.version;
+  const last = canvasState.events ? canvasState.events[canvasState.events.length - 1] : null;
+  if (last) {
+    const d = document.createElement("div");
+    d.className = "ev " + last.event;
+    d.innerHTML = `<b>${last.event}</b> v${last.canvas_version}`;
+    const log = document.getElementById("log");
+    log.prepend(d);
+    while (log.children.length > 60) log.lastChild.remove();
+  }
+}
+
+// ---- init ----
+(async () => {
+  try {
+    canvasState = await (await fetch("/api/snapshot")).json();
+    render();
+  } catch { /* server not up yet; WS will fill in */ }
+  connect();
+  resize();
+  // pan (drag) + zoom (wheel)
+  let dragging = false, lastX = 0, lastY = 0;
+  canvas.addEventListener("mousedown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+  window.addEventListener("mouseup", () => { dragging = false; });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    panX += e.clientX - lastX; panY += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY; draw();
+  });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    scale = Math.max(5, Math.min(2000, scale * factor));
+    draw();
+  }, { passive: false });
+  // double-click re-fits the current view mode
+  canvas.addEventListener("dblclick", () => { render(); });
+  // keyboard drive: W/S move, A/D turn 15 degrees, Q/E turn 90 degrees
+  window.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+    const keymap = {
+      w: "move_forward", s: "move_backward",
+      a: "turn_left", d: "turn_right",
+      q: "turn_left_big", e: "turn_right_big",
+    };
+    const act = keymap[e.key.toLowerCase()];
+    if (act) { e.preventDefault(); post("/api/execute_action", { robot_id: ROBOT_ID, action: act }); }
+  });
+  // polling fallback in case the WebSocket is unavailable
+  setInterval(async () => {
+    try {
+      const s = await (await fetch("/api/snapshot")).json();
+      if (s.version > (canvasState?.version || 0)) { canvasState = s; render(); }
+    } catch { /* ignore */ }
+  }, 1500);
+})();
+</script>
+</body>
+</html>

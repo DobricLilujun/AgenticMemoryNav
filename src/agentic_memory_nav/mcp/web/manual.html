@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MCP Manual Validation Console</title>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c2230; --line:#2a3340;
+    --fg:#e6edf3; --muted:#8b98a9; --accent:#388bfd; --green:#3fb950;
+    --red:#f85149; --amber:#d29922; --cyan:#17becf;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    background:var(--bg); color:var(--fg); display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+  header { display:flex; align-items:center; gap:14px; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header .sub { color:var(--muted); font-size:12px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#6a727d; }
+  .dot.on { background:var(--green); box-shadow:0 0 8px var(--green); }
+  .dot.off { background:var(--red); }
+  .status { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+  .spacer { flex:1; }
+  .metrics { display:flex; gap:18px; font-size:12px; color:var(--muted); }
+  .metrics b { color:var(--fg); font-weight:600; }
+  main { flex:1; display:flex; min-height:0; }
+  #canvasWrap { flex:1; position:relative; background:#ffffff; }
+  canvas { display:block; width:100%; height:100%; }
+  aside { width:320px; background:var(--panel); border-left:1px solid var(--line); padding:14px; overflow-y:auto; display:flex; flex-direction:column; gap:14px; }
+  .card { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .card h2 { font-size:12px; margin:0 0 10px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  .row button { flex:1; padding:8px; font-size:12px; cursor:pointer; border-radius:7px; background:#0d1219; color:var(--fg); border:1px solid var(--line); }
+  .row button:hover { border-color:var(--accent); }
+  .row button.danger { color:var(--red); }
+  .row button.active { border-color:var(--cyan); color:var(--cyan); }
+  label { font-size:11px; color:var(--muted); display:block; margin:8px 0 3px; }
+  input,select { width:100%; background:#0d1219; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:12px; }
+  .log { font-family:ui-monospace,monospace; font-size:11px; line-height:1.5; max-height:200px; overflow-y:auto; }
+  .log .ev { padding:2px 0; border-bottom:1px solid #1a2029; }
+  .log .ev b { color:var(--accent); }
+  .ev.ok b { color:var(--green); } .ev.blocked b { color:var(--red); } .ev.obs b { color:var(--amber); }
+  .kbd { display:inline-block; min-width:22px; padding:2px 6px; border:1px solid var(--line); border-radius:5px; background:#0d1219; font-family:ui-monospace,monospace; font-size:11px; text-align:center; margin:2px; }
+  .keypad { display:grid; grid-template-columns:repeat(3,48px); grid-template-rows:repeat(3,48px); gap:6px; justify-content:center; margin-top:6px; }
+  .keypad button { cursor:pointer; border-radius:8px; background:#0d1219; color:var(--fg); border:1px solid var(--line); font-size:14px; }
+  .keypad button:hover { border-color:var(--accent); }
+  .keypad .kW { grid-column:2; grid-row:1; } .keypad .kA { grid-column:1; grid-row:2; }
+  .keypad .kS { grid-column:2; grid-row:2; } .keypad .kD { grid-column:3; grid-row:2; }
+  .keypad .kQ { grid-column:1; grid-row:3; } .keypad .kE { grid-column:3; grid-row:3; }
+  #promptBox { display:none; position:absolute; left:50%; top:18px; transform:translateX(-50%);
+    background:var(--panel); border:1px solid var(--amber); border-radius:10px; padding:10px 14px; z-index:10;
+    box-shadow:0 8px 30px rgba(0,0,0,.45); }
+  #promptBox .q { font-size:13px; margin-bottom:8px; }
+  #promptBox .ans button { padding:6px 16px; margin-right:6px; cursor:pointer; border-radius:7px; border:1px solid var(--line); background:#0d1219; color:var(--fg); }
+  #promptBox .ans button.yes { color:var(--red); border-color:var(--red); }
+  #promptBox .ans button.no { color:var(--green); border-color:var(--green); }
+</style>
+</head>
+<body>
+<header>
+  <h1>MCP Manual Validation Console</h1>
+  <span class="sub">WASD drive &middot; ground-truth feedback &middot; abstract unit length</span>
+  <span class="status"><span class="dot" id="dot"></span><span id="wsState">connecting&hellip;</span></span>
+  <div class="spacer"></div>
+  <div class="metrics">
+    <div>pose <b id="mPose">&mdash;</b></div>
+    <div>steps <b id="mSteps">0</b></div>
+    <div>blocked <b id="mBlocked">0</b></div>
+    <div>obstacles <b id="mObs">0</b></div>
+    <div>version <b id="mVer">0</b></div>
+    <div>mode <b id="mMode">clear</b></div>
+  </div>
+</header>
+<main>
+  <div id="canvasWrap">
+    <canvas id="canvas"></canvas>
+    <div id="promptBox">
+      <div class="q">Was this action blocked by an obstacle?</div>
+      <div class="ans">
+        <button class="yes" id="ansYes">Yes, blocked</button>
+        <button class="no" id="ansNo">No, clear</button>
+      </div>
+    </div>
+  </div>
+  <aside>
+    <div class="card">
+      <h2>Drive (WASD)</h2>
+      <div class="keypad">
+        <button class="kW" data-act="move_forward">W</button>
+        <button class="kA" data-act="turn_left">A</button>
+        <button class="kS" data-act="move_backward">S</button>
+        <button class="kD" data-act="turn_right">D</button>
+        <button class="kQ" data-act="turn_left_big">Q</button>
+        <button class="kE" data-act="turn_right_big">E</button>
+      </div>
+      <div style="margin-top:8px; font-size:11px; color:var(--muted); line-height:1.7">
+        <span class="kbd">W</span>/<span class="kbd">S</span> move forward/backward &middot;
+        <span class="kbd">A</span>/<span class="kbd">D</span> turn 15&deg; &middot;
+        <span class="kbd">Q</span>/<span class="kbd">E</span> turn 90&deg;<br/>
+        <span class="kbd">Shift</span> toggle blocked mode (obstacle + red path on every move)
+      </div>
+    </div>
+    <div class="card">
+      <h2>View mode</h2>
+      <div class="row">
+        <button id="modeGlobal" class="active">Global</button>
+        <button id="modeFollow">Follow</button>
+      </div>
+      <label>Follow zoom (units visible around the robot)</label>
+      <input id="followRadius" type="number" step="1" min="1" value="15" />
+      <div class="row" style="margin-top:8px">
+        <button id="reset" class="danger">Reset episode</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Legend</h2>
+      <div style="font-size:11px; color:var(--muted); line-height:1.9">
+        <div><span style="color:#17becf">&#9733;</span> robot (cyan star + arrow)</div>
+        <div><span style="color:#1f77b4">&#9679;</span> successful step (blue dots)</div>
+        <div><span style="color:#d62728">&#10005;</span> blocked step (red)</div>
+        <div><span style="color:#e74c3c">&#9634;</span> reported meta-obstacle (dashed)</div>
+      </div>
+    </div>
+    <div class="card"><h2>Event log</h2><div class="log" id="log"></div></div>
+  </aside>
+</main>
+<script>
+const ROBOT_ID = "robot_0";
+
+// The pending action awaiting ground-truth feedback from the operator.
+let pending = null;
+let stepCount = 0;
+let blockedCount = 0;
+// Shift toggles blocked mode: when on, every move is recorded as blocked.
+let blockedMode = false;
+
+// Canvas state mirrors the engine snapshot (robots, trajectory, obstacles).
+let canvasState = null;
+
+// View state: "global" fits the whole world, "follow" zooms to the robot.
+let viewMode = "global";
+let scale = 150; // pixels per unit length
+let panX = 0, panY = 0;
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+window.addEventListener("resize", resize);
+
+function toPx(x, y) {
+  return [canvas.clientWidth / 2 + panX + x * scale, canvas.clientHeight / 2 + panY - y * scale];
+}
+
+// Compute a bounding box for everything on the canvas (used by global mode).
+function worldBounds() {
+  let xs = [0], ys = [0];
+  for (const r of (canvasState?.robots || [])) { xs.push(r.position[0]); ys.push(r.position[1]); }
+  for (const s of (canvasState?.trajectory || [])) {
+    xs.push(s.start[0], s.end[0]); ys.push(s.start[1], s.end[1]);
+  }
+  for (const o of (canvasState?.obstacles || [])) {
+    const props = o.properties || {};
+    if (props.visible === false) continue;
+    const geom = o.geometry || [];
+    for (const p of geom) { xs.push(p[0]); ys.push(p[1]); }
+    if (o.position) { xs.push(o.position[0]); ys.push(o.position[1]); }
+  }
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const ymin = Math.min(...ys), ymax = Math.max(...ys);
+  const pad = Math.max(xmax - xmin, ymax - ymin, 1) * 0.15 + 0.4;
+  return [xmin - pad, xmax + pad, ymin - pad, ymax + pad];
+}
+
+function applyView() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (viewMode === "follow") {
+    const r = canvasState?.robots?.[0];
+    const radius = parseFloat(document.getElementById("followRadius").value) || 15;
+    scale = Math.min(w, h) / (radius * 2);
+    if (r) {
+      panX = -r.position[0] * scale;
+      panY = r.position[1] * scale;
+    }
+  } else {
+    const [xmin, xmax, ymin, ymax] = worldBounds();
+    const ww = Math.max(xmax - xmin, 0.1), hh = Math.max(ymax - ymin, 0.1);
+    scale = Math.min(w / ww, h / hh) * 0.95;
+    panX = -(xmin + ww / 2) * scale;
+    panY = (ymin + hh / 2) * scale;
+  }
+}
+
+function draw() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);
+  if (!canvasState) return;
+  drawTrajectory(canvasState.trajectory || []);
+  drawObstacles(canvasState.obstacles || []);
+  drawRobots(canvasState.robots || []);
+}
+
+function drawTrajectory(segs) {
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i];
+    const blocked = s.success === false;
+    const current = i === segs.length - 1;
+    const color = blocked ? "#d62728" : (current ? "#1f77b4" : "#9e9e9e");
+    const [x1, y1] = toPx(s.start[0], s.start[1]);
+    const [x2, y2] = toPx(s.end[0], s.end[1]);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = blocked ? 3 : (current ? 2.4 : 1.6);
+    ctx.setLineDash(blocked || current ? [] : [6, 5]);
+    ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    // step marker
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 0.8;
+    ctx.beginPath(); ctx.arc(x2, y2, blocked ? 3 : 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    // direction arrowhead on the segment
+    const segLen = Math.hypot(x2 - x1, y2 - y1);
+    if (segLen > 12) {
+      const ux = (x2 - x1) / segLen, uy = (y2 - y1) / segLen;
+      const px = x1 + (x2 - x1) * 0.65, py = y1 + (y2 - y1) * 0.65;
+      const ah = Math.min(9, segLen * 0.22);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(px + ux * ah, py + uy * ah);
+      ctx.lineTo(px - uy * ah * 0.55, py + ux * ah * 0.55);
+      ctx.lineTo(px + uy * ah * 0.55, py - ux * ah * 0.55);
+      ctx.closePath(); ctx.fill();
+    }
+    if (blocked) {
+      // red cross
+      const r = 5;
+      ctx.strokeStyle = "#d62728"; ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(x2 - r, y2 - r); ctx.lineTo(x2 + r, y2 + r);
+      ctx.moveTo(x2 + r, y2 - r); ctx.lineTo(x2 - r, y2 + r);
+      ctx.stroke();
+    }
+    if (i === 0) {
+      // green square start marker
+      ctx.fillStyle = "#2ca02c"; ctx.strokeStyle = "#000"; ctx.lineWidth = 1;
+      ctx.fillRect(x1 - 4, y1 - 4, 8, 8); ctx.strokeRect(x1 - 4, y1 - 4, 8, 8);
+    }
+  }
+}
+
+function drawObstacles(obs) {
+  // Group line segments belonging to the same logical obstacle.
+  const groups = {};
+  const singles = [];
+  for (const o of obs) {
+    const props = o.properties || {};
+    if (props.visible === false) continue; // hidden world: not drawn
+    const isLine = (o.obstacle_type || o.type) === "line";
+    if (isLine && props.group_id) {
+      (groups[props.group_id] = groups[props.group_id] || []).push(o);
+    } else {
+      singles.push(o);
+    }
+  }
+  for (const gid of Object.keys(groups)) {
+    const members = groups[gid];
+    const first = members[0];
+    const confirmed = (first.properties || {}).confirmed !== false;
+    const pts = [];
+    for (const m of members) {
+      const geom = m.geometry || [];
+      if (geom.length >= 2) { pts.push(geom[0], geom[1]); }
+    }
+    if (!pts.length) continue;
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const half = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 2;
+    const [px, py] = toPx(cx - half, cy + half);
+    const size = 2 * half * scale;
+    if (confirmed) {
+      ctx.fillStyle = "rgba(231,76,60,0.18)";
+      ctx.fillRect(px, py, size, size);
+      ctx.strokeStyle = "#e74c3c"; ctx.lineWidth = 1.5;
+      ctx.strokeRect(px, py, size, size);
+    } else {
+      ctx.strokeStyle = "rgba(231,76,60,0.55)"; ctx.lineWidth = 1.2;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(px, py, size, size);
+      ctx.setLineDash([]);
+    }
+  }
+  for (const o of singles) {
+    const isLine = (o.obstacle_type || o.type) === "line";
+    if (isLine) {
+      const [x1, y1] = toPx(o.geometry[0][0], o.geometry[0][1]);
+      const [x2, y2] = toPx(o.geometry[1][0], o.geometry[1][1]);
+      ctx.strokeStyle = "#e74c3c"; ctx.lineWidth = Math.max(2, (o.width || 0.05) * scale);
+      ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    } else if (o.position) {
+      const [cx, cy] = toPx(o.position[0], o.position[1]);
+      const r = Math.max(4, (o.radius || 0.2) * scale);
+      ctx.fillStyle = "rgba(231,76,60,0.18)";
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#e74c3c"; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+  }
+}
+
+function drawRobots(robots) {
+  for (const r of robots) {
+    const [cx, cy] = toPx(r.position[0], r.position[1]);
+    const theta = (r.theta || 0) * Math.PI / 180;
+    const len = Math.min(canvas.clientWidth, canvas.clientHeight) * 0.03;
+    const dx = len * Math.cos(-theta), dy = len * Math.sin(-theta);
+    ctx.strokeStyle = "#17becf"; ctx.fillStyle = "#17becf"; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+    // arrow head
+    const ax = cx + dx, ay = cy + dy;
+    ctx.beginPath(); ctx.arc(ax, ay, 3, 0, Math.PI * 2); ctx.fill();
+    // star marker
+    ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#000"; ctx.lineWidth = 1; ctx.stroke();
+  }
+}
+
+// ---- server calls ----
+async function post(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return res.json();
+}
+
+function logEvent(kind, text) {
+  const d = document.createElement("div");
+  d.className = "ev " + kind;
+  d.innerHTML = `<b>${text}</b>`;
+  const log = document.getElementById("log");
+  log.prepend(d);
+  while (log.children.length > 80) log.lastChild.remove();
+}
+
+// Drive the robot. Blocked mode (toggled by Shift) decides whether a move is
+// recorded as blocked; clear moves apply immediately, blocked moves draw the
+// failed path and the meta-obstacle at once, with no prompt delay.
+async function drive(action) {
+  if (pending) return; // wait for the previous answer first
+  if (!currentPose()) {
+    // auto-create the robot at the origin on the first action
+    await post("/api/create_robot", { robot_id: ROBOT_ID, start_pose: { x: 0, y: 0, theta: 0 } });
+    await refresh();
+  }
+  stepCount += 1;
+  if (action.startsWith("move")) {
+    pending = { action };
+    await answer(blockedMode);
+  } else {
+    await post("/api/execute_action", { robot_id: ROBOT_ID, action });
+    logEvent("ok", `${action}`);
+    await refresh();
+  }
+}
+
+async function answer(blocked) {
+  const req = pending; pending = null;
+  document.getElementById("promptBox").style.display = "none";
+  if (!req) return;
+  if (blocked) {
+    blockedCount += 1;
+    // Reproduce a blocked move: force the engine to record the failed segment by
+    // placing a tiny hidden blocker exactly at the target point, executing the
+    // move (which fails), then reporting the visible meta-obstacle.
+    const pose = currentPose();
+    if (pose) {
+      const rad = pose.theta * Math.PI / 180;
+      const sign = req.action === "move_backward" ? -1 : 1;
+      const tx = pose.x + sign * 1.0 * Math.cos(rad);
+      const ty = pose.y + sign * 1.0 * Math.sin(rad);
+      // hidden blocker: blocks but never renders
+      await post("/api/add_obstacle", { robot_id: ROBOT_ID, obstacle: {
+        obstacle_type: "point", x: tx, y: ty, radius: 0.05,
+        properties: { visible: false, tag: "virtual_blocker" },
+      } });
+      await post("/api/execute_action", { robot_id: ROBOT_ID, action: req.action });
+      // remove the virtual blocker so the next clear attempt can pass
+      const snap = await (await fetch("/api/snapshot")).json();
+      for (const o of snap.obstacles) {
+        if ((o.properties || {}).tag === "virtual_blocker") {
+          await post("/api/remove_obstacle", { obstacle_id: o.obstacle_id });
+        }
+      }
+      // visible meta-obstacle reported by the operator; its near edge sits at
+      // the blocked action's target point so the square lies ahead of the path.
+      await postMetaSquare(pose, rad, sign);
+      logEvent("blocked", `${req.action} BLOCKED`);
+    }
+  } else {
+    await post("/api/execute_action", { robot_id: ROBOT_ID, action: req.action });
+    logEvent("ok", `${req.action}`);
+  }
+  await refresh();
+}
+
+// Standard meta-obstacle square placed ahead of the robot. The square's near
+// edge sits at the blocked action's target point (one move step along the
+// heading), so the robot's failed path ends at the obstacle boundary.
+async function postMetaSquare(pose, rad, sign = 1) {
+  const size = 2.0, half = size / 2;
+  // centre = target point + half size along the heading
+  const fx = pose.x + sign * (1.0 + half) * Math.cos(rad);
+  const fy = pose.y + sign * (1.0 + half) * Math.sin(rad);
+  const group = "meta_" + Date.now();
+  const sides = [
+    [[fx - half, fy - half], [fx + half, fy - half]],
+    [[fx + half, fy - half], [fx + half, fy + half]],
+    [[fx + half, fy + half], [fx - half, fy + half]],
+    [[fx - half, fy + half], [fx - half, fy - half]],
+  ];
+  for (const [start, end] of sides) {
+    await post("/api/add_obstacle", { robot_id: ROBOT_ID, obstacle: {
+      obstacle_type: "line",
+      geometry: { start, end },
+      width: 0.02, label: "",
+      properties: { group_id: group, confirmed: false },
+    } });
+  }
+}
+
+function currentPose() {
+  const r = canvasState?.robots?.find(x => x.robot_id === ROBOT_ID) || canvasState?.robots?.[0];
+  if (!r) return null;
+  return { x: r.position[0], y: r.position[1], theta: r.theta };
+}
+
+async function refresh() {
+  canvasState = await (await fetch("/api/snapshot")).json();
+  applyView();
+  draw();
+  updateHud();
+}
+
+function updateHud() {
+  const r = canvasState?.robots?.[0];
+  document.getElementById("mPose").textContent =
+    r ? `${r.position[0].toFixed(2)}, ${r.position[1].toFixed(2)} \u00b7 ${Math.round(r.theta)}\u00b0` : "\u2014";
+  document.getElementById("mSteps").textContent = stepCount;
+  document.getElementById("mBlocked").textContent = blockedCount;
+  document.getElementById("mObs").textContent = (canvasState?.obstacles || []).length;
+  document.getElementById("mVer").textContent = canvasState?.version ?? 0;
+}
+
+// ---- wiring ----
+document.querySelectorAll(".keypad button").forEach(b => {
+  b.onclick = () => drive(b.dataset.act);
+});
+document.getElementById("ansYes").onclick = () => answer(true);
+document.getElementById("ansNo").onclick = () => answer(false);
+document.getElementById("reset").onclick = async () => {
+  await post("/api/reset", { robot_id: ROBOT_ID, clear_events: true });
+  await post("/api/create_robot", { robot_id: ROBOT_ID, start_pose: { x: 0, y: 0, theta: 0 } });
+  stepCount = 0; blockedCount = 0;
+  logEvent("ok", "episode reset");
+  await refresh();
+};
+
+const modeGlobal = document.getElementById("modeGlobal");
+const modeFollow = document.getElementById("modeFollow");
+modeGlobal.onclick = () => { viewMode = "global"; modeGlobal.classList.add("active"); modeFollow.classList.remove("active"); applyView(); draw(); };
+modeFollow.onclick = () => { viewMode = "follow"; modeFollow.classList.add("active"); modeGlobal.classList.remove("active"); applyView(); draw(); };
+document.getElementById("followRadius").onchange = () => { if (viewMode === "follow") { applyView(); draw(); } };
+
+// Single key handler: Shift toggles blocked mode; other keys drive the robot.
+function inFormField(e) {
+  const t = e.target;
+  return t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA");
+}
+
+window.addEventListener("keydown", (e) => {
+  if (inFormField(e)) return;
+  if ((e.key === "Shift" || e.key === "ShiftLeft" || e.key === "ShiftRight") && !e.repeat) {
+    blockedMode = !blockedMode;
+    const el = document.getElementById("mMode");
+    el.textContent = blockedMode ? "blocked" : "clear";
+    el.style.color = blockedMode ? "#d62728" : "#2ca02c";
+    logEvent("ok", blockedMode ? "blocked mode ON" : "blocked mode OFF");
+    e.preventDefault();
+    return;
+  }
+  if (pending) {
+    if (e.key === "y" || e.key === "Y") answer(true);
+    if (e.key === "n" || e.key === "N") answer(false);
+    return;
+  }
+  const keymap = { w: "move_forward", s: "move_backward", a: "turn_left", d: "turn_right", q: "turn_left_big", e: "turn_right_big" };
+  const act = keymap[e.key.toLowerCase()];
+  if (act) { e.preventDefault(); drive(act); }
+}, true);
+
+// ---- init ----
+(async () => {
+  await refresh();
+  connect();
+  resize();
+  let dragging = false, lastX = 0, lastY = 0;
+  canvas.addEventListener("mousedown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+  window.addEventListener("mouseup", () => { dragging = false; });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    panX += e.clientX - lastX; panY += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY; draw();
+  });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    scale = Math.max(5, Math.min(2000, scale * factor));
+    draw();
+  }, { passive: false });
+  setInterval(async () => {
+    try {
+      const s = await (await fetch("/api/snapshot")).json();
+      if (s.version !== canvasState?.version) { canvasState = s; applyView(); draw(); updateHud(); }
+    } catch { /* ignore */ }
+  }, 1500);
+})();
+
+function connect() {
+  const proto = location.protocol === "https" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws/canvas/main`);
+  ws.onopen = () => { document.getElementById("dot").className = "dot on"; document.getElementById("wsState").textContent = "live"; };
+  ws.onclose = () => { document.getElementById("dot").className = "dot off"; document.getElementById("wsState").textContent = "reconnecting\u2026"; setTimeout(connect, 1200); };
+  ws.onmessage = (m) => {
+    let msg; try { msg = JSON.parse(m.data); } catch { return; }
+    if (msg.type === "snapshot") { canvasState = msg.canvas; applyView(); draw(); updateHud(); }
+    else if (msg.type === "event") {
+      // simplest robust approach: refetch the full snapshot on any event
+      refresh();
+    }
+  };
+}
+</script>
+</body>
+</html>
