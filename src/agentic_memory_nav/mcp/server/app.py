@@ -118,17 +118,17 @@ def _register_routes(app: Starlette, engine: SimulationEngine, hub: EventHub) ->
     fake-robot MCP client observe identical state.
     """
 
-    async def serve_index(request: Request) -> Response:
-        index_path = WEB_DIR / "index.html"
-        if index_path.is_file():
-            return FileResponse(str(index_path))
-        return JSONResponse({"message": "MCP infinite-canvas server running"})
-
     async def serve_manual(request: Request) -> Response:
         manual_path = WEB_DIR / "manual.html"
         if manual_path.is_file():
             return FileResponse(str(manual_path))
         return JSONResponse({"message": "manual validation console not installed"})
+
+    async def serve_robot_svg(request: Request) -> Response:
+        svg_path = WEB_DIR.parent / "robot.svg"
+        if svg_path.is_file():
+            return FileResponse(str(svg_path), media_type="image/svg+xml")
+        return Response("not found", status_code=404)
 
     async def snapshot(request: Request) -> Response:
         return JSONResponse(engine.get_canvas())
@@ -179,8 +179,9 @@ def _register_routes(app: Starlette, engine: SimulationEngine, hub: EventHub) ->
         body = await request.json()
         return _post(engine.reset_simulation(body.get("robot_id"), body.get("clear_events", False)))
 
-    app.add_route("/", serve_index, methods=["GET"])
+    app.add_route("/", serve_manual, methods=["GET"])
     app.add_route("/manual", serve_manual, methods=["GET"])
+    app.add_route("/robot.svg", serve_robot_svg, methods=["GET"])
     app.add_route("/health", health, methods=["GET"])
     app.add_route("/api/snapshot", snapshot, methods=["GET"])
     app.add_route("/api/actions", actions, methods=["GET"])

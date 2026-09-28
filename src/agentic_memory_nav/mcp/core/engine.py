@@ -40,15 +40,15 @@ from .actions import (
 from .collision import check_move
 from .geometry import Segment, move as move_point, normalize_theta
 from .models import Event, Obstacle, Pose, Robot, TrajectorySegment, _new_id
-
-# Default action parameters from the specification (abstract unit lengths / degrees).
-DEFAULT_MOVE_STEP = 1.0
-DEFAULT_SMALL_TURN_DEGREES = 15.0
-DEFAULT_BIG_TURN_DEGREES = 90.0
-DEFAULT_CANVAS_ID = "main"
-DEFAULT_FRAME = "world"
-COORDINATE_UNIT = "unit_length"
-PERCEPTION_RADIUS = 1.0e6  # by default the robot perceives every obstacle
+from ..presets import (
+    COORDINATE_UNIT,
+    DEFAULT_BIG_TURN_DEGREES,
+    DEFAULT_CANVAS_ID,
+    DEFAULT_FRAME,
+    DEFAULT_MOVE_STEP,
+    DEFAULT_SMALL_TURN_DEGREES,
+    PERCEPTION_RADIUS,
+)
 
 
 def resolve_action_id(name: str) -> int:

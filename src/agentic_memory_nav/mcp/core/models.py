@@ -123,6 +123,7 @@ class Robot:
             "robot_id": self.robot_id,
             "position": [round(self.pose.x, 6), round(self.pose.y, 6)],
             "theta": round(self.pose.theta, 6),
+            "start": [round(self.start.x, 6), round(self.start.y, 6)],
             "active": self.active,
         }
 

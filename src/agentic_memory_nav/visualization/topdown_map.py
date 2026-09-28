@@ -179,6 +179,33 @@ class TopDownMap:
             xs, ys = zip(*self.trajectory, strict=False)
             ax.plot(xs, ys, "b-", linewidth=1.5, alpha=0.7, label="Trajectory")
 
+            # Direction arrows in the middle of each segment.
+            for (x1, y1), (x2, y2) in zip(self.trajectory, self.trajectory[1:]):
+                seg_dx = x2 - x1
+                seg_dy = y2 - y1
+                seg_len = math.hypot(seg_dx, seg_dy)
+                if seg_len < 1e-6:
+                    continue
+                angle = math.atan2(seg_dy, seg_dx)
+                arrow_len = min(seg_len * 0.35, 0.3)
+                mid_x = (x1 + x2) / 2.0
+                mid_y = (y1 + y2) / 2.0
+                adx = arrow_len * math.cos(angle)
+                ady = arrow_len * math.sin(angle)
+                ax.arrow(
+                    mid_x - adx / 2.0,
+                    mid_y - ady / 2.0,
+                    adx,
+                    ady,
+                    head_width=arrow_len * 0.6,
+                    head_length=arrow_len * 0.5,
+                    fc="blue",
+                    ec="blue",
+                    linewidth=1.2,
+                    alpha=0.85,
+                    zorder=4,
+                )
+
         # Landmarks.
         category_marker = {
             "sofa": ("o", 10),

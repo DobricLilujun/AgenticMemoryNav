@@ -1,0 +1,14 @@
+"""Shared default presets for the MCP infinite-canvas service."""
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8092
+DEFAULT_TRANSPORT = "streamable-http"
+
+DEFAULT_CANVAS_ID = "main"
+DEFAULT_FRAME = "world"
+COORDINATE_UNIT = "unit_length"
+
+DEFAULT_MOVE_STEP = 1.0
+DEFAULT_SMALL_TURN_DEGREES = 15.0
+DEFAULT_BIG_TURN_DEGREES = 90.0
+PERCEPTION_RADIUS = 1.0e6

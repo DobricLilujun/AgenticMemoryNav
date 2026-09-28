@@ -39,7 +39,7 @@ class EventHub:
     def _on_event(self, event: dict[str, Any]) -> None:
         """Push an engine event to every connection queue (non-blocking)."""
 
-        payload = {"type": "event", "event": event}
+        payload = {"type": "event", "event": event, "canvas": self.engine.get_canvas()}
         for queue in list(self._queues):
             queue.put_nowait(payload)
 

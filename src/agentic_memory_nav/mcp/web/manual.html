@@ -94,6 +94,9 @@
         <button class="kQ" data-act="turn_left_big">Q</button>
         <button class="kE" data-act="turn_right_big">E</button>
       </div>
+      <div class="row" style="margin-top:8px">
+        <button id="shiftToggle" style="flex:1">Shift: OFF</button>
+      </div>
       <div style="margin-top:8px; font-size:11px; color:var(--muted); line-height:1.7">
         <span class="kbd">W</span>/<span class="kbd">S</span> move forward/backward &middot;
         <span class="kbd">A</span>/<span class="kbd">D</span> turn 15&deg; &middot;
@@ -108,7 +111,7 @@
         <button id="modeFollow">Follow</button>
       </div>
       <label>Follow zoom (units visible around the robot)</label>
-      <input id="followRadius" type="number" step="1" min="1" value="15" />
+      <input id="followRadius" type="number" step="1" min="1" value="10" />
       <div class="row" style="margin-top:8px">
         <button id="reset" class="danger">Reset episode</button>
       </div>
@@ -116,9 +119,10 @@
     <div class="card">
       <h2>Legend</h2>
       <div style="font-size:11px; color:var(--muted); line-height:1.9">
-        <div><span style="color:#17becf">&#9733;</span> robot (cyan star + arrow)</div>
-        <div><span style="color:#1f77b4">&#9679;</span> successful step (blue dots)</div>
-        <div><span style="color:#d62728">&#10005;</span> blocked step (red)</div>
+        <div><span style="color:#1f77b4">&#9679;</span> robot (blue icon + arrow)</div>
+        <div><span style="color:#7f8c8d">&#9473;</span> trajectory (dashed grey)</div>
+        <div><span style="color:#d62728">&#10005;</span> blocked move (red)</div>
+        <div><span style="color:#2ca02c">&#9679;</span> start position</div>
         <div><span style="color:#e74c3c">&#9634;</span> reported meta-obstacle (dashed)</div>
       </div>
     </div>
@@ -137,6 +141,11 @@ let blockedMode = false;
 
 // Canvas state mirrors the engine snapshot (robots, trajectory, obstacles).
 let canvasState = null;
+let renderFrame = null;
+let eventRefreshFrame = null;
+let refreshInFlight = null;
+let refreshQueued = false;
+let webSocketLive = false;
 
 // View state: "global" fits the whole world, "follow" zooms to the robot.
 let viewMode = "global";
@@ -144,6 +153,12 @@ let scale = 150; // pixels per unit length
 let panX = 0, panY = 0;
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+
+// Visual constants in world units.
+const START_RADIUS = 0.2;
+const ROBOT_SIZE = 0.2;
+const TRAJ_WIDTH = 0.05;
+const NEXT_ARROW_WIDTH = 0.04;
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -153,6 +168,46 @@ function resize() {
   draw();
 }
 window.addEventListener("resize", resize);
+
+// SVG robot icon cache.
+let robotSvgTemplate = null;
+const robotIconImages = {};
+
+async function loadRobotSvgTemplate() {
+  if (robotSvgTemplate !== null) return;
+  try {
+    const resp = await fetch('/robot.svg');
+    robotSvgTemplate = await resp.text();
+    preloadRobotIcon('#1f77b4', 1.0);
+    preloadRobotIcon('#1f77b4', 0.35);
+  } catch (e) {
+    console.error('Failed to load robot.svg:', e);
+    robotSvgTemplate = '';
+  }
+}
+
+function preloadRobotIcon(color, alpha) {
+  const key = `${color}_${alpha}`;
+  if (robotIconImages[key] || !robotSvgTemplate) return;
+  const svg = robotSvgTemplate.replace(/fill="#000000"/g, `fill="${color}"`);
+  const blob = new Blob([svg], {type: 'image/svg+xml'});
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    robotIconImages[key] = img;
+    draw();
+  };
+  img.src = url;
+}
+
+function getRobotIcon(color, alpha) {
+  const key = `${color}_${alpha}`;
+  if (robotIconImages[key]) return robotIconImages[key];
+  preloadRobotIcon(color, alpha);
+  return null;
+}
+
+loadRobotSvgTemplate();
 
 function toPx(x, y) {
   return [canvas.clientWidth / 2 + panX + x * scale, canvas.clientHeight / 2 + panY - y * scale];
@@ -204,55 +259,119 @@ function draw() {
   if (!canvasState) return;
   drawTrajectory(canvasState.trajectory || []);
   drawObstacles(canvasState.obstacles || []);
+  drawStartMarkers(canvasState.robots || []);
   drawRobots(canvasState.robots || []);
 }
 
+function renderState() {
+  renderFrame = null;
+  applyView();
+  draw();
+  updateHud();
+}
+
+function scheduleRender() {
+  if (renderFrame === null) renderFrame = requestAnimationFrame(renderState);
+}
+
+function setCanvasState(snapshot) {
+  canvasState = snapshot;
+  scheduleRender();
+}
+
 function drawTrajectory(segs) {
-  for (let i = 0; i < segs.length; i++) {
-    const s = segs[i];
+  ctx.lineCap = "round";
+  for (const s of segs) {
     const blocked = s.success === false;
-    const current = i === segs.length - 1;
-    const color = blocked ? "#d62728" : (current ? "#1f77b4" : "#9e9e9e");
+    const color = blocked ? "#d62728" : "#7f8c8d";
     const [x1, y1] = toPx(s.start[0], s.start[1]);
     const [x2, y2] = toPx(s.end[0], s.end[1]);
     ctx.strokeStyle = color;
-    ctx.lineWidth = blocked ? 3 : (current ? 2.4 : 1.6);
-    ctx.setLineDash(blocked || current ? [] : [6, 5]);
-    ctx.lineCap = "round";
+    ctx.lineWidth = Math.max(1, TRAJ_WIDTH * scale * (blocked ? 1.4 : 1.0));
+    ctx.setLineDash(blocked ? [] : [6, 5]);
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-    // step marker
-    ctx.setLineDash([]);
-    ctx.fillStyle = color;
-    ctx.strokeStyle = "#000";
-    ctx.lineWidth = 0.8;
-    ctx.beginPath(); ctx.arc(x2, y2, blocked ? 3 : 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    // direction arrowhead on the segment
-    const segLen = Math.hypot(x2 - x1, y2 - y1);
-    if (segLen > 12) {
-      const ux = (x2 - x1) / segLen, uy = (y2 - y1) / segLen;
-      const px = x1 + (x2 - x1) * 0.65, py = y1 + (y2 - y1) * 0.65;
-      const ah = Math.min(9, segLen * 0.22);
+
+    // Direction arrow at the midpoint so the VLM can read travel direction.
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const segLen = Math.hypot(dx, dy);
+    if (segLen > 4) {
+      const midX = (x1 + x2) / 2;
+      const midY = (y1 + y2) / 2;
+      const angle = Math.atan2(dy, dx);
+      const arrowLen = Math.min(segLen * 0.35, 24);
+      const headW = arrowLen * 0.55;
+      ctx.save();
+      ctx.translate(midX, midY);
+      ctx.rotate(angle);
       ctx.fillStyle = color;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(1, ctx.lineWidth * 0.5);
       ctx.beginPath();
-      ctx.moveTo(px + ux * ah, py + uy * ah);
-      ctx.lineTo(px - uy * ah * 0.55, py + ux * ah * 0.55);
-      ctx.lineTo(px + uy * ah * 0.55, py - ux * ah * 0.55);
-      ctx.closePath(); ctx.fill();
-    }
-    if (blocked) {
-      // red cross
-      const r = 5;
-      ctx.strokeStyle = "#d62728"; ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.moveTo(x2 - r, y2 - r); ctx.lineTo(x2 + r, y2 + r);
-      ctx.moveTo(x2 + r, y2 - r); ctx.lineTo(x2 - r, y2 + r);
+      ctx.moveTo(arrowLen / 2, 0);
+      ctx.lineTo(-arrowLen / 2, headW / 2);
+      ctx.lineTo(-arrowLen / 2, -headW / 2);
+      ctx.closePath();
+      ctx.fill();
       ctx.stroke();
+      ctx.restore();
     }
-    if (i === 0) {
-      // green square start marker
-      ctx.fillStyle = "#2ca02c"; ctx.strokeStyle = "#000"; ctx.lineWidth = 1;
-      ctx.fillRect(x1 - 4, y1 - 4, 8, 8); ctx.strokeRect(x1 - 4, y1 - 4, 8, 8);
-    }
+  }
+  ctx.setLineDash([]);
+}
+
+function drawStartMarkers(robots) {
+  for (const r of robots) {
+    const start = r.start;
+    if (!start || start.length !== 2) continue;
+    const [cx, cy] = toPx(start[0], start[1]);
+    const pxRadius = Math.max(4, START_RADIUS * scale);
+    ctx.fillStyle = "#2ca02c"; ctx.strokeStyle = "#000000"; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(cx, cy, pxRadius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+}
+
+function drawRobotIcon(x, y, thetaRad, sizePx, color, alpha = 1.0) {
+  const img = getRobotIcon(color, alpha);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(-thetaRad);
+  ctx.globalAlpha = alpha;
+  if (img && img.complete && img.naturalWidth) {
+    // Rotate so the SVG's top (antenna) points in the robot's heading direction.
+    ctx.save();
+    ctx.rotate(-Math.PI / 2);
+    const s = sizePx * 1.3;
+    ctx.drawImage(img, -s / 2, -s / 2, s, s);
+    ctx.restore();
+  } else {
+    // Fallback circle while the SVG is still loading.
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(0, 0, sizePx / 2, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#000000"; ctx.lineWidth = 1.2; ctx.stroke();
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function drawRobots(robots) {
+  for (const r of robots) {
+    const [cx, cy] = toPx(r.position[0], r.position[1]);
+    const theta = (r.theta || 0) * Math.PI / 180;
+    const color = r.active === false ? "#7f8c8d" : "#1f77b4";
+    const sizePx = Math.max(12, ROBOT_SIZE * scale);
+
+    drawRobotIcon(cx, cy, theta, sizePx, color, 1.0);
+
+    // Predicted next pose: dashed arrow + ghost robot.
+    const nx = r.position[0] + 1.0 * Math.cos(theta);
+    const ny = r.position[1] + 1.0 * Math.sin(theta);
+    const [npx, npy] = toPx(nx, ny);
+    ctx.strokeStyle = "#1f77b4"; ctx.lineWidth = Math.max(1, NEXT_ARROW_WIDTH * scale);
+    ctx.setLineDash([8, 6]); ctx.globalAlpha = 0.55;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(npx, npy); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    drawRobotIcon(npx, npy, theta, sizePx, "#1f77b4", 0.35);
   }
 }
 
@@ -316,23 +435,6 @@ function drawObstacles(obs) {
   }
 }
 
-function drawRobots(robots) {
-  for (const r of robots) {
-    const [cx, cy] = toPx(r.position[0], r.position[1]);
-    const theta = (r.theta || 0) * Math.PI / 180;
-    const len = Math.min(canvas.clientWidth, canvas.clientHeight) * 0.03;
-    const dx = len * Math.cos(-theta), dy = len * Math.sin(-theta);
-    ctx.strokeStyle = "#17becf"; ctx.fillStyle = "#17becf"; ctx.lineWidth = 1.6;
-    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
-    // arrow head
-    const ax = cx + dx, ay = cy + dy;
-    ctx.beginPath(); ctx.arc(ax, ay, 3, 0, Math.PI * 2); ctx.fill();
-    // star marker
-    ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = "#000"; ctx.lineWidth = 1; ctx.stroke();
-  }
-}
-
 // ---- server calls ----
 async function post(path, body) {
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -356,7 +458,6 @@ async function drive(action) {
   if (!currentPose()) {
     // auto-create the robot at the origin on the first action
     await post("/api/create_robot", { robot_id: ROBOT_ID, start_pose: { x: 0, y: 0, theta: 0 } });
-    await refresh();
   }
   stepCount += 1;
   if (action.startsWith("move")) {
@@ -365,7 +466,6 @@ async function drive(action) {
   } else {
     await post("/api/execute_action", { robot_id: ROBOT_ID, action });
     logEvent("ok", `${action}`);
-    await refresh();
   }
 }
 
@@ -385,18 +485,13 @@ async function answer(blocked) {
       const tx = pose.x + sign * 1.0 * Math.cos(rad);
       const ty = pose.y + sign * 1.0 * Math.sin(rad);
       // hidden blocker: blocks but never renders
-      await post("/api/add_obstacle", { robot_id: ROBOT_ID, obstacle: {
+      const virtualBlocker = await post("/api/add_obstacle", { robot_id: ROBOT_ID, obstacle: {
         obstacle_type: "point", x: tx, y: ty, radius: 0.05,
         properties: { visible: false, tag: "virtual_blocker" },
       } });
       await post("/api/execute_action", { robot_id: ROBOT_ID, action: req.action });
       // remove the virtual blocker so the next clear attempt can pass
-      const snap = await (await fetch("/api/snapshot")).json();
-      for (const o of snap.obstacles) {
-        if ((o.properties || {}).tag === "virtual_blocker") {
-          await post("/api/remove_obstacle", { obstacle_id: o.obstacle_id });
-        }
-      }
+      await post("/api/remove_obstacle", { obstacle_id: virtualBlocker.obstacle_id });
       // visible meta-obstacle reported by the operator; its near edge sits at
       // the blocked action's target point so the square lies ahead of the path.
       await postMetaSquare(pose, rad, sign);
@@ -406,14 +501,13 @@ async function answer(blocked) {
     await post("/api/execute_action", { robot_id: ROBOT_ID, action: req.action });
     logEvent("ok", `${req.action}`);
   }
-  await refresh();
 }
 
 // Standard meta-obstacle square placed ahead of the robot. The square's near
 // edge sits at the blocked action's target point (one move step along the
 // heading), so the robot's failed path ends at the obstacle boundary.
 async function postMetaSquare(pose, rad, sign = 1) {
-  const size = 2.0, half = size / 2;
+  const size = 0.5, half = size / 2;
   // centre = target point + half size along the heading
   const fx = pose.x + sign * (1.0 + half) * Math.cos(rad);
   const fy = pose.y + sign * (1.0 + half) * Math.sin(rad);
@@ -424,14 +518,14 @@ async function postMetaSquare(pose, rad, sign = 1) {
     [[fx + half, fy + half], [fx - half, fy + half]],
     [[fx - half, fy + half], [fx - half, fy - half]],
   ];
-  for (const [start, end] of sides) {
-    await post("/api/add_obstacle", { robot_id: ROBOT_ID, obstacle: {
+  await Promise.all(sides.map(([start, end]) =>
+    post("/api/add_obstacle", { robot_id: ROBOT_ID, obstacle: {
       obstacle_type: "line",
       geometry: { start, end },
       width: 0.02, label: "",
       properties: { group_id: group, confirmed: false },
-    } });
-  }
+    } })
+  ));
 }
 
 function currentPose() {
@@ -441,10 +535,33 @@ function currentPose() {
 }
 
 async function refresh() {
-  canvasState = await (await fetch("/api/snapshot")).json();
-  applyView();
-  draw();
-  updateHud();
+  if (eventRefreshFrame !== null) {
+    cancelAnimationFrame(eventRefreshFrame);
+    eventRefreshFrame = null;
+  }
+  if (refreshInFlight) {
+    refreshQueued = true;
+    return refreshInFlight;
+  }
+  refreshInFlight = (async () => {
+    do {
+      refreshQueued = false;
+      setCanvasState(await (await fetch("/api/snapshot")).json());
+    } while (refreshQueued);
+  })();
+  try {
+    await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
+}
+
+function scheduleEventRefresh() {
+  if (eventRefreshFrame !== null) return;
+  eventRefreshFrame = requestAnimationFrame(() => {
+    eventRefreshFrame = null;
+    refresh().catch(() => {});
+  });
 }
 
 function updateHud() {
@@ -466,9 +583,9 @@ document.getElementById("ansNo").onclick = () => answer(false);
 document.getElementById("reset").onclick = async () => {
   await post("/api/reset", { robot_id: ROBOT_ID, clear_events: true });
   await post("/api/create_robot", { robot_id: ROBOT_ID, start_pose: { x: 0, y: 0, theta: 0 } });
-  stepCount = 0; blockedCount = 0;
+  stepCount = 0; blockedCount = 0; blockedMode = false;
+  updateModeUI();
   logEvent("ok", "episode reset");
-  await refresh();
 };
 
 const modeGlobal = document.getElementById("modeGlobal");
@@ -476,6 +593,24 @@ const modeFollow = document.getElementById("modeFollow");
 modeGlobal.onclick = () => { viewMode = "global"; modeGlobal.classList.add("active"); modeFollow.classList.remove("active"); applyView(); draw(); };
 modeFollow.onclick = () => { viewMode = "follow"; modeFollow.classList.add("active"); modeGlobal.classList.remove("active"); applyView(); draw(); };
 document.getElementById("followRadius").onchange = () => { if (viewMode === "follow") { applyView(); draw(); } };
+
+function updateModeUI() {
+  const el = document.getElementById("mMode");
+  const btn = document.getElementById("shiftToggle");
+  el.textContent = blockedMode ? "blocked" : "clear";
+  el.style.color = blockedMode ? "#d62728" : "#2ca02c";
+  if (btn) {
+    btn.textContent = blockedMode ? "Shift: ON (blocked)" : "Shift: OFF";
+    btn.style.borderColor = blockedMode ? "#d62728" : "";
+    btn.style.color = blockedMode ? "#d62728" : "";
+  }
+}
+
+document.getElementById("shiftToggle").onclick = () => {
+  blockedMode = !blockedMode;
+  updateModeUI();
+  logEvent("ok", blockedMode ? "blocked mode ON" : "blocked mode OFF");
+};
 
 // Single key handler: Shift toggles blocked mode; other keys drive the robot.
 function inFormField(e) {
@@ -487,9 +622,7 @@ window.addEventListener("keydown", (e) => {
   if (inFormField(e)) return;
   if ((e.key === "Shift" || e.key === "ShiftLeft" || e.key === "ShiftRight") && !e.repeat) {
     blockedMode = !blockedMode;
-    const el = document.getElementById("mMode");
-    el.textContent = blockedMode ? "blocked" : "clear";
-    el.style.color = blockedMode ? "#d62728" : "#2ca02c";
+    updateModeUI();
     logEvent("ok", blockedMode ? "blocked mode ON" : "blocked mode OFF");
     e.preventDefault();
     return;
@@ -506,8 +639,8 @@ window.addEventListener("keydown", (e) => {
 
 // ---- init ----
 (async () => {
-  await refresh();
   connect();
+  refresh().catch(() => {});
   resize();
   let dragging = false, lastX = 0, lastY = 0;
   canvas.addEventListener("mousedown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
@@ -524,9 +657,10 @@ window.addEventListener("keydown", (e) => {
     draw();
   }, { passive: false });
   setInterval(async () => {
+    if (webSocketLive) return;
     try {
       const s = await (await fetch("/api/snapshot")).json();
-      if (s.version !== canvasState?.version) { canvasState = s; applyView(); draw(); updateHud(); }
+      if (s.version !== canvasState?.version) setCanvasState(s);
     } catch { /* ignore */ }
   }, 1500);
 })();
@@ -534,15 +668,13 @@ window.addEventListener("keydown", (e) => {
 function connect() {
   const proto = location.protocol === "https" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/canvas/main`);
-  ws.onopen = () => { document.getElementById("dot").className = "dot on"; document.getElementById("wsState").textContent = "live"; };
-  ws.onclose = () => { document.getElementById("dot").className = "dot off"; document.getElementById("wsState").textContent = "reconnecting\u2026"; setTimeout(connect, 1200); };
+  ws.onopen = () => { webSocketLive = true; document.getElementById("dot").className = "dot on"; document.getElementById("wsState").textContent = "live"; };
+  ws.onclose = () => { webSocketLive = false; document.getElementById("dot").className = "dot off"; document.getElementById("wsState").textContent = "reconnecting\u2026"; setTimeout(connect, 1200); };
   ws.onmessage = (m) => {
     let msg; try { msg = JSON.parse(m.data); } catch { return; }
-    if (msg.type === "snapshot") { canvasState = msg.canvas; applyView(); draw(); updateHud(); }
-    else if (msg.type === "event") {
-      // simplest robust approach: refetch the full snapshot on any event
-      refresh();
-    }
+    if (msg.type === "snapshot") { setCanvasState(msg.canvas); }
+    else if (msg.type === "event" && msg.canvas) { setCanvasState(msg.canvas); }
+    else if (msg.type === "event") { scheduleEventRefresh(); }
   };
 }
 </script>

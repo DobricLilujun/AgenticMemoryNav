@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from enum import Enum
 
+from ..presets import DEFAULT_BIG_TURN_DEGREES, DEFAULT_MOVE_STEP, DEFAULT_SMALL_TURN_DEGREES
+
 # The canonical id -> name mapping required by the specification.
 ACTION_BY_ID: dict[int, str] = {
     0: "turn_left",
@@ -37,10 +39,10 @@ ACTION_BY_ID: dict[int, str] = {
 
 ACTION_ID_BY_NAME: dict[str, int] = {name: action_id for action_id, name in ACTION_BY_ID.items()}
 
-# The default action parameters from the specification.
-MOVE_STEP = 1.0  # unit lengths per move
-SMALL_TURN_DEGREES = 15.0
-BIG_TURN_DEGREES = 90.0
+# Backward-compatible aliases for the shared simulation presets.
+MOVE_STEP = DEFAULT_MOVE_STEP
+SMALL_TURN_DEGREES = DEFAULT_SMALL_TURN_DEGREES
+BIG_TURN_DEGREES = DEFAULT_BIG_TURN_DEGREES
 
 
 class ActionKind(str, Enum):
